@@ -2,10 +2,8 @@ import constants as K
 import pygame
 
 class Renderer:
-    def __init__(self, environment, cell_size=60, fps=30):
-        self.map = environment.map
-        self.width = environment.map.width
-        self.height = environment.map.height
+    def __init__(self, environment, cell_size, fps):
+        self.environment = environment
         self.cell_size = cell_size
         self.screen = None
         self.clock = None
@@ -19,8 +17,8 @@ class Renderer:
 
     def initialize(self):
         pygame.init()
-        width = self.width * self.cell_size
-        height = self.height * self.cell_size
+        width = self.environment.map.width * self.cell_size
+        height = self.environment.map.height * self.cell_size
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("Environment Renderer")
         self.clock = pygame.time.Clock()
@@ -35,9 +33,9 @@ class Renderer:
 
         self.screen.fill((0, 0, 0))
 
-        for y in range(self.height):
-            for x in range(self.width):
-                cell = self.map.map[y][x]
+        for y in range(self.environment.map.height):
+            for x in range(self.environment.map.width):
+                cell = self.environment.map.map[y][x]
                 cell_color = self.colors.get(cell.type, (0, 0, 0))
                 pygame.draw.rect(
                     self.screen,

@@ -1,41 +1,40 @@
-import constants as K
-from environment import *
-from policy import *
-from agent import * 
-from map import *
-from renderer import *
+class Trainer:
+    def __init__(self, episodes, max_steps, environment, renderer):
+        self.episodes = episodes
+        self.max_steps = max_steps
+        self.environment = environment
+        self.renderer = renderer
+        self.render = renderer is not None
+    
+    def train(self):
+        if self.render: 
+            self.renderer.initialize()
 
-def main():
-    policy = Policy()
+        for episode in range(self.episodes):
+            self.environment.reset()
+            step = 0
+            done_agents = set()
 
-    agents = [
-        Agent(agent_id="Naruto", x=0, y=0, policy=policy),
-        Agent(agent_id="Sasuke", x=5, y=3, policy=policy),
-        Agent(agent_id="Sakura", x=2, y=4, policy=policy),
-        Agent(agent_id="Kakashi", x=10, y=4, policy=policy)
-    ]
+            print(f"Starting episode {episode+1}/{self.episodes}")
 
-    map = Map()
-    map.init_from_file("../maps/basic.txt")
-    map.place_agents(agents)
-    print("Initial Map:")
-    print(map)
+            for step in range(self.max_steps):
+                if len(done_agents) == len(self.environment.agents):
+                    break
 
-    env = Environment(agents=agents, map=map)
+                for agent in self.environment.agents:
+                    if agent.done: 
+                        continue
 
-    renderer = Renderer(environment=env, fps=60)
-    renderer.initialize()
+                    state = self.environment.get_microscopic_observation(agent)
+                    action = agent.policy.select_action(state)
+                    obs, reward, done = self.environment.act(agent, action)
+                    agent.policy.train(state, action, reward, obs, done)
 
-    while True:
-        for agent in env.agents.values():
-            if agent.done:
-                continue
-            action = agent.policy.select_action("state placeholder")
-            obs, reward, done = env.act(agent, action)
-            print(f"Agent {agent.id} took action {action}, reward: {reward}, done: {done}")
-        
-        renderer.render()
+                    if done: 
+                        done_agents.add(agent)
 
+                    if self.render: 
+                        self.renderer.render()
 
-if __name__ == "__main__":
-    main()
+            print(f"Episode {episode+1} finished in {step+1} steps with {len(done_agents)}/{len(self.environment.agents)} done agents.")
+

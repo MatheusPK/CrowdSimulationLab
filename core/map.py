@@ -9,7 +9,18 @@ class Cell:
         return f"<Cell type={self.type} entity={self.entity}>"
 
 class Map:
-    def init_from_file(self, filename):
+    def __init__(self, filename=None, agents=None):
+        if filename:
+            self.load_from_file(filename)
+        else:
+            self.width = 0
+            self.height = 0
+            self.map = []
+
+        if agents:
+            self.place_agents(agents)
+
+    def load_from_file(self, filename):
         with open(filename, 'r') as f:
             self.map = []
             self.width, self.height = map(int, f.readline().strip().split())

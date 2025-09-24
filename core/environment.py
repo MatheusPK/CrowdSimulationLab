@@ -1,10 +1,13 @@
 import constants as K
 from map import *
+from agent import *
 
 class Environment:
     def __init__(self, agents, map):
-        self.agents = { agent.id : agent for agent in agents }
+        self.agents = agents
         self.map = map
+        self.initial_map = self.copy_map(map)
+        self.initial_agents = self.copy_agents(agents)
 
         self.actions = {
             K.NORTH: (0, -1),
@@ -23,6 +26,10 @@ class Environment:
             K.AGENT_COLLISION: -5,
             K.TARGET_COLLISION: 10
         }
+
+    def reset(self):
+        self.map = self.copy_map(self.initial_map)
+        self.agents = self.copy_agents(self.initial_agents)
     
     def act(self, agent, action):
         action_vector = self.actions[action]
@@ -59,8 +66,22 @@ class Environment:
         else: return K.NO_COLLISION
     
     def get_microscopic_observation(self, agent):
-        agent = self.agents[agent.id]
-        return "observation"  # Placeholder for actual observation logic
+        return [agent.x, agent.y]
 
+    def copy_map(self, map):
+        new_map = Map()
+        new_map.width = map.width
+        new_map.height = map.height
+        new_map.map = [[Cell(type=cell.type, entity=cell.entity) for cell in row] for row in map.map]
+        return new_map
+
+    def copy_agents(self, agents):
+        new_agents = []
+        for agent in agents:
+            new_agent = Agent(agent_id=agent.id, x=agent.x, y=agent.y, policy=agent.policy)
+            new_agent.done = agent.done
+            new_agents.append(new_agent)
+        return new_agents
+        
 
     
