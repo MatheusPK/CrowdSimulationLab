@@ -1,0 +1,2 @@
+largura altura
+list(0 - vazio | 1 - obstaculo | 2 - agente | 3 - target)
