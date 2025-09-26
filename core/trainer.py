@@ -4,20 +4,19 @@ class Trainer:
         self.max_steps = max_steps
         self.environment = environment
         self.renderer = renderer
-        self.render = renderer is not None
+        self.render = renderer
     
     def train(self):
-        if self.render: 
-            self.renderer.initialize()
+        self.renderer.initialize()
 
         for episode in range(self.episodes):
             self.environment.reset()
-            step = 0
+            steps_taken = 0
             done_agents = set()
 
-            print(f"Starting episode {episode+1}/{self.episodes}")
+            print(f"\nStarting episode {episode+1}/{self.episodes}")
 
-            for step in range(self.max_steps):
+            for steps_taken in range(self.max_steps):
                 if len(done_agents) == len(self.environment.agents):
                     break
 
@@ -27,14 +26,19 @@ class Trainer:
 
                     state = self.environment.get_microscopic_observation(agent)
                     action = agent.policy.select_action(state)
-                    obs, reward, done = self.environment.act(agent, action)
-                    agent.policy.train(state, action, reward, obs, done)
+
+                    next_state, reward, done = self.environment.act(agent, action)
+                    agent.policy.train(state, action, reward, next_state, done)
 
                     if done: 
                         done_agents.add(agent)
 
-                    if self.render: 
-                        self.renderer.render()
+                self.renderer.render()
 
-            print(f"Episode {episode+1} finished in {step+1} steps with {len(done_agents)}/{len(self.environment.agents)} done agents.")
+            print(
+                f"Episode {episode+1}/{self.episodes} | "
+                f"Steps: {steps_taken+1} | "
+                f"Done: {len(done_agents)}/{len(self.environment.agents)}",
+                end="\n\n"
+            )
 

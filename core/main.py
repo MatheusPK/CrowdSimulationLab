@@ -1,3 +1,4 @@
+import sys
 from environment import *
 from policy import *
 from agent import *
@@ -6,6 +7,10 @@ from renderer import *
 from trainer import *
 
 if __name__ == "__main__":
+    # trainer params: episodes, max_steps, render, output_model_file
+    # runner params: cell_size, fps, model_file
+    # process command line args
+
     policy = Policy()
 
     agents = [
@@ -15,9 +20,9 @@ if __name__ == "__main__":
         Agent(agent_id="Kakashi", x=10, y=4, policy=policy)
     ]
 
-    map = Map(filename="../maps/basic.txt", agents=agents)
+    map = Map(filename="../maps/normal.txt", agents=agents)
     env = Environment(agents=agents, map=map)
-    renderer = Renderer(environment=env, cell_size=20, fps=120)
-    trainer = Trainer(episodes=3, max_steps=500, environment=env, renderer=renderer)
+    renderer = Renderer(environment=env, cell_size=20, fps=24)
+    trainer = Trainer(episodes=1000, max_steps=200, environment=env, renderer=renderer)
 
     trainer.train()

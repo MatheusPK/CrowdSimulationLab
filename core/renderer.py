@@ -6,8 +6,12 @@ class Renderer:
         self.environment = environment
         self.cell_size = cell_size
         self.screen = None
-        self.clock = None
+        self.clock = pygame.time.Clock()
+        self.width = self.environment.map.width * self.cell_size
+        self.height = self.environment.map.height * self.cell_size
         self.fps = fps
+        self.enabled = True
+
         self.colors = {
             K.EMPTY:    (255, 255, 255),
             K.OBSTACLE: (0, 0, 0),
@@ -17,19 +21,25 @@ class Renderer:
 
     def initialize(self):
         pygame.init()
-        width = self.environment.map.width * self.cell_size
-        height = self.environment.map.height * self.cell_size
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("Environment Renderer")
-        self.clock = pygame.time.Clock()
+        self.screen = pygame.display.set_mode((self.width, self.height))
 
     def poll_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.close()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    self.enabled = not self.enabled
+                    if not self.enabled:
+                        self.screen.fill((0, 0, 0))
+                        pygame.display.flip()
+                        
 
     def render(self):
         self.poll_events()
+
+        if not self.enabled:
+            return
 
         self.screen.fill((0, 0, 0))
 
@@ -45,6 +55,3 @@ class Renderer:
 
         pygame.display.flip()
         self.clock.tick(self.fps)
-
-    def close(self):
-        pygame.quit()
