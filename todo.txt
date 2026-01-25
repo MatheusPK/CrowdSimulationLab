@@ -1,3 +1,1 @@
-1. Migrar para ambiente continu
-2. Criar vetor de direção
-3. Criar logica de movimento, self driven force
+1. Adicionar DQN no policy
