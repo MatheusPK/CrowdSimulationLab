@@ -1,13 +1,3 @@
-* Adicionar toggle no Renderer para ativar e desativar durante a execução ✅
-* Implementar a* para calcular distancias
-* Definir certinho o estado do agente
-        [
-            agent.x, agent.y,
-            # direção normalizada até o alvo (só se visível; senão 0,0)
-            dx_norm, dy_norm,
-            # flag 0/1: alvo visível nesta observação?
-            target_visible,
-            # ocupação das 8 vizinhas imediatas (0=bloq, 1=livre, 2=target)
-            N, S, W, E, NW, NE, SW, SE
-        ]
-* Implementar PPO
+1. Migrar para ambiente continu
+2. Criar vetor de direção
+3. Criar logica de movimento, self driven force

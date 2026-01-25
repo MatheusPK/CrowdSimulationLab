@@ -4,41 +4,51 @@ class Trainer:
         self.max_steps = max_steps
         self.environment = environment
         self.renderer = renderer
-        self.render = renderer
-    
+
     def train(self):
         self.renderer.initialize()
 
         for episode in range(self.episodes):
             self.environment.reset()
-            steps_taken = 0
-            done_agents = set()
+            done_ids = set()
 
             print(f"\nStarting episode {episode+1}/{self.episodes}")
 
-            for steps_taken in range(self.max_steps):
-                if len(done_agents) == len(self.environment.agents):
+            for step in range(self.max_steps):
+                if len(done_ids) == len(self.environment.agents):
                     break
 
+                # 1) act
+                actions_by_id = {}
+                prev_states_by_id = {}
+
                 for agent in self.environment.agents:
-                    if agent.done: 
+                    if agent.id in done_ids:
                         continue
 
-                    state = self.environment.get_microscopic_observation(agent)
-                    action = agent.policy.select_action(state)
+                    s = self.environment.get_microscopic_observation(agent)
+                    a = agent.policy.select_action(s)
+                    prev_states_by_id[agent.id] = s
+                    actions_by_id[agent.id] = a
 
-                    next_state, reward, done = self.environment.act(agent, action)
-                    agent.policy.train(state, action, reward, next_state, done)
+                # 2) step
+                transitions = self.environment.step(actions_by_id)
 
-                    if done: 
-                        done_agents.add(agent)
+                # 3) train
+                for agent_id, (prev_state, reward, next_state, done) in transitions.items():
+                    a = actions_by_id[agent_id]
+                    agent = next(a for a in self.environment.agents if a.id == agent_id)  # ou mantenha dict id->agent
+
+                    agent.policy.train(prev_state, a, reward, next_state, done)
+
+                    if done:
+                        done_ids.add(agent_id)
 
                 self.renderer.render()
 
             print(
                 f"Episode {episode+1}/{self.episodes} | "
-                f"Steps: {steps_taken+1} | "
-                f"Done: {len(done_agents)}/{len(self.environment.agents)}",
-                end="\n\n"
+                f"Steps: {step+1} | "
+                f"Done: {len(done_ids)}/{len(self.environment.agents)}\n"
             )
 

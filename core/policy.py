@@ -4,14 +4,14 @@ import constants as K
 class Policy:
     def __init__(self):
         self.action_space = [
-            K.NORTH,
-            K.SOUTH,
-            K.EAST,
-            K.WEST,
-            K.NORTHEAST,
-            K.NORTHWEST,
-            K.SOUTHEAST,
-            K.SOUTHWEST
+            K.N,
+            K.S,
+            K.E,
+            K.W,
+            K.NE,
+            K.NW,
+            K.SE,
+            K.SW
         ]
 
     def select_action(self, state):
