@@ -71,7 +71,8 @@ class Environment:
                 agent.vx_half = 0.0
                 agent.vy_half = 0.0
 
-            reward = 0.0
+            reward = 0.0 if done else -0.1
+            
             next_state = self.get_microscopic_observation(agent)
 
             transitions[agent.id] = (
