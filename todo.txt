@@ -2,5 +2,5 @@
 2.	Implementar DQN + target network + replay + ε-decay + γ=0.999 + μ=0.1
 3.	Treinar 1 agente primeiro; depois rodar N agentes com a policy congelada
 4.	Fazer pretrain door 2m → finetune door 1m
-5.	Ajustar DT para 0.1 se seu objetivo é reproduzir números do paper
+5.	Ajustar DT para 0.1
 6.	Corrigir o caso riw==0 para não atravessar obstáculo
