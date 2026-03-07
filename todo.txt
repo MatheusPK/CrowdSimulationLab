@@ -1,6 +1,13 @@
+Código:
 1.	Reward -0.1 por step, 0 no exit ✅
-2.	Implementar DQN + target network + replay + ε-decay + γ=0.999 + μ=0.1
+2.	Implementar DQN
 3.	Treinar 1 agente primeiro; depois rodar N agentes com a policy congelada
-4.	Fazer pretrain door 2m → finetune door 1m
-5.	Ajustar DT para 0.1
-6.	Corrigir o caso riw==0 para não atravessar obstáculo
+4.	Ajustar DT para 0.1
+
+Proposta de Dissertação:
+1. Ajustar Research Questions - Detalhar mais as research questions
+2. Ajustar como avaliar os resultados - mais importante
+3. Apresentação em cima do Research Questions
+3. Explicar melhor os modelos
+4. Resultados preliminares - da um peso legal
+5. Paper
