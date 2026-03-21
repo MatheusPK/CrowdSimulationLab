@@ -38,11 +38,15 @@ TRAIN_MAPS = {
     "school_floor":       "maps/train/school_floor.txt",
     "office_wing_medium": "maps/train/office_wing_medium.txt",
 
-    # Médios — 36×80, hazard e layout mais complexo
-    "office_complex_real":"maps/train/office_complex_real.txt",
-    "mall_medium":        "maps/train/mall_medium.txt",
-    "library_hard":       "maps/train/library_hard.txt",
-    "di_style":           "maps/train/di_style.txt",
+    # Médios — 36×80, hazard e layout mais complexo (currículo v2)
+    "office_complex_real":    "maps/train/office_complex_real.txt",
+    "mall_medium":            "maps/train/mall_medium.txt",
+    "library_hard":           "maps/train/library_hard.txt",
+    "di_style":               "maps/train/di_style.txt",
+    # Novos mapas v2 — dilema de rota e alta densidade de hazard
+    "hazard_corridor_small":  "maps/train/hazard_corridor_small.txt",
+    "hazard_bypass_medium":   "maps/train/hazard_bypass_medium.txt",
+    "hazard_dense_office":    "maps/train/hazard_dense_office.txt",
 }
 
 # ── Mapas de avaliação (cenários do mestrado) ─────────────────────────────────
@@ -64,8 +68,8 @@ ALL_MAPS = {
 }
 
 SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
-MAP      = ALL_MAPS["mall_panic"]         # <-- mapa
-AGENTS   = 10                             # <-- número de agentes
+MAP      = list(ALL_MAPS.values())[14]       # <-- mapa
+AGENTS   = 20                             # <-- número de agentes
 
 # ── Parâmetros gerais ─────────────────────────────────────────────────────────
 

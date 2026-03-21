@@ -1,3 +1,4 @@
+import heapq
 import math
 from collections import deque
 
@@ -60,6 +61,9 @@ class Environment:
         # Garante que o agente escolhe o exit acessível mesmo que o mais próximo
         # em linha reta esteja bloqueado por hazard (ex: mall_panic, di_emergency).
         self._dist_map_safe: list[list[float]] = self._build_dist_map_safe()
+
+        # Cache de densidade por step — populado em step(), None fora do loop
+        self._density_cache: dict | None = None
 
     # ------------------------------------------------------------------
     # dist_map — BFS multi-source a partir de todos os exits
@@ -136,7 +140,6 @@ class Environment:
         reward de progresso — não queremos distorcer o sinal de aprendizado.
         """
         from simulation_params import ASTAR_HAZARD_COST
-        import heapq
 
         rows = self.map_data.rows
         cols = self.map_data.cols
@@ -250,6 +253,12 @@ class Environment:
             for agent in self.agents
         ]
 
+        # FIX: cache de densidade local calculado uma vez por step.
+        # Sem isso, compute_reward e get_observation chamam local_density()
+        # individualmente, resultando em O(n²) por agente por step.
+        # O cache é um dict {id(agent): count} válido apenas para este step.
+        self._density_cache = self._compute_density_cache()
+
         reward_list = []
         for i, agent in enumerate(self.agents):
             if agent.evacuated and prev_distances[i] == 0.0 and new_distances[i] == 0.0:
@@ -342,10 +351,19 @@ class Environment:
         if not moved_any:
             agent.stop()
 
+        # Tracking de contato com hazard para métricas
+        if self.touches_hazard(agent):
+            agent.touched_hazard = True
+
         if self.touches_exit(agent):
             if not agent.evacuated:
                 agent.evacuated = True
                 agent.evacuation_time = self.time
+                # Registra qual exit foi usado
+                for exit_obj in self.map_data.exits:
+                    if self.circle_intersects_rect(agent.x, agent.y, agent.radius, exit_obj):
+                        agent.exit_used = exit_obj
+                        break
                 # Move o agente para fora dos limites do mapa — ele saiu do ambiente.
                 # Isso garante que não bloqueia outros agentes no exit nem aparece
                 # no renderer, sem precisar de lógica extra em nenhum outro lugar.
@@ -372,6 +390,18 @@ class Environment:
             strength = agent.obstacle_avoidance_strength * (1.0 - dist / threshold)
             fx += nx * strength
             fy += ny * strength
+
+        # FIX: mapas com tiles O individuais acumulam forças de dezenas de obstáculos
+        # adjacentes (ex: row 0 inteira = 56 tiles × força individual = 1568 px/s).
+        # Sem clamping, agentes próximos à borda ficam completamente presos mesmo em
+        # espaço livre. Limitamos a força total a current_speed para que a parede
+        # repila mas não paralise o agente.
+        total = math.hypot(fx, fy)
+        if total > agent.current_speed and total > 0.0:
+            scale = agent.current_speed / total
+            fx *= scale
+            fy *= scale
+
         return fx, fy
 
     def compute_agent_avoidance(self, agent):
@@ -544,7 +574,28 @@ class Environment:
         cy = exit_obj.y + exit_obj.height / 2.0
         return math.hypot(cx - agent.x, cy - agent.y)
 
+    def _compute_density_cache(self) -> dict:
+        """
+        Calcula a densidade local de todos os agentes ativos em O(n²) uma única vez.
+        Retorna dict {id(agent): count} para consulta O(1) em compute_reward e
+        get_observation. Chamado uma vez por step() antes do loop de rewards.
+        """
+        active = [a for a in self.agents if not a.evacuated]
+        cache = {id(a): 0 for a in self.agents}
+        radius = LOCAL_DENSITY_RADIUS
+        for i, a in enumerate(active):
+            for j, b in enumerate(active):
+                if i == j:
+                    continue
+                if math.hypot(a.x - b.x, a.y - b.y) <= radius:
+                    cache[id(a)] += 1
+        return cache
+
     def local_density(self, agent, radius=None):
+        # Se o cache do step atual estiver disponível, usa ele (O(1)).
+        # Fallback para cálculo direto quando chamado fora do loop de step.
+        if radius is None and hasattr(self, '_density_cache') and self._density_cache is not None:
+            return self._density_cache.get(id(agent), 0)
         radius = radius if radius is not None else LOCAL_DENSITY_RADIUS
         count = 0
         for other in self.agents:
@@ -732,7 +783,12 @@ class Environment:
         if agent.evacuated:
             reward += REWARD_EVACUATED
 
-        if progress <= 0.0 and not agent.evacuated:
+        # FIX: progress = 0 é normal quando o agente ainda está acelerando dentro
+        # da mesma célula BFS (leva ~4 steps para mudar de célula com smoothing=0.18).
+        # Penalizar estagnação junto com retrocesso mascarava o sinal de progresso —
+        # ~94% dos steps recebiam -1.0, impossibilitando o aprendizado.
+        # Agora só penaliza retrocesso real (progress negativo).
+        if progress < -1e-4 and not agent.evacuated:
             reward += REWARD_NO_PROGRESS
 
         if self.touches_hazard(agent):
@@ -788,27 +844,97 @@ class Environment:
             return {}
 
         evacuated = [a for a in self.agents if a.evacuated]
-        evac_times = [a.evacuation_time for a in evacuated if hasattr(a, 'evacuation_time')]
+        evac_times = [a.evacuation_time for a in evacuated if a.evacuation_time is not None]
 
         emotions = [a.emotion_level for a in self.agents]
-        panic_reached = [a for a in self.agents if hasattr(a, 'peak_emotion')
-                         and a.peak_emotion >= FSM_EVACUATE_TO_PANIC]
-
         speeds = [a.current_speed for a in self.agents]
 
+        # M6: panic_rate
+        panic_reached_count = sum(
+            1 for a in self.agents
+            if hasattr(a, "peak_emotion") and a.peak_emotion >= FSM_EVACUATE_TO_PANIC
+        )
+
+        # M7: mean_peak_emotion
+        peak_emotions = [a.peak_emotion for a in self.agents if hasattr(a, "peak_emotion")]
+
+        # M9: hazard_contact_rate
+        hazard_touched_count = sum(
+            1 for a in self.agents if getattr(a, "touched_hazard", False)
+        )
+
+        # M10: exit_utilization (r_util de Xu 2021)
+        # Agrupa tiles E contíguos em regiões (um tile E por grupo pode ter vizinhos E).
+        # map_loader cria 1 Exit object por tile — precisamos agrupar antes de contar.
+        # Algoritmo: Union-Find por adjacência (4-conectado entre tiles E).
+        def _group_exit_tiles(exits_list, tile_size):
+            """Retorna dict {exit_obj → group_id} agrupando tiles E adjacentes."""
+            if not exits_list:
+                return {}
+            positions = {(e.x, e.y): e for e in exits_list}
+            parent = {e: e for e in exits_list}
+            def find(x):
+                while parent[x] is not x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+            def union(a, b):
+                parent[find(a)] = find(b)
+            for e in exits_list:
+                for dx, dy in [(tile_size, 0), (-tile_size, 0), (0, tile_size), (0, -tile_size)]:
+                    neighbor = positions.get((e.x + dx, e.y + dy))
+                    if neighbor:
+                        union(e, neighbor)
+            groups = {}
+            for e in exits_list:
+                root = find(e)
+                groups[id(root)] = groups.get(id(root), 0)
+            return {e: id(find(e)) for e in exits_list}
+
+        exit_group_map = _group_exit_tiles(self.map_data.exits, self.map_data.tile_size)
+        exit_usage: dict = {}
+        for a in evacuated:
+            if getattr(a, "exit_used", None) is not None:
+                group_id = exit_group_map.get(a.exit_used, id(a.exit_used))
+                exit_usage[group_id] = exit_usage.get(group_id, 0) + 1
+        n_groups = len(set(exit_group_map.values())) if exit_group_map else 0
+        if len(exit_usage) >= 2:
+            counts = list(exit_usage.values())
+            r_util = min(counts) / max(counts) if max(counts) > 0 else 0.0
+        elif len(exit_usage) == 1 and n_groups >= 2:
+            r_util = 0.0  # todos usaram um só exit quando havia alternativa
+        else:
+            r_util = 1.0 if exit_usage else 0.0
+
+        # M4b: emotion ao momento de evacuação (não ao final do episódio)
+        # Requer que a emoção seja salva no momento da evacuação.
+        # Como o agente é movido para (-9999,-9999) ao evacuar, a emoção final
+        # não reflete o estado no momento da saída. Usamos peak_emotion como proxy.
+        mean_emotion_at_evac = (
+            sum(peak_emotions) / len(peak_emotions) if peak_emotions else 0.0
+        )
+
         return {
-            # Primárias
+            # M1 — evacuação
             "evacuation_rate":      len(evacuated) / n,
             "all_evacuated":        len(evacuated) == n,
+            # M2 — tempo
             "mean_evacuation_time": sum(evac_times) / max(1, len(evac_times)) if evac_times else self.max_steps,
             "steps":                self.time,
-
-            # Emocionais
+            # M4 — emoção final
             "mean_emotion_final":   sum(emotions) / n,
+            # M4b — emoção no pico (proxy para emoção ao evacuar)
+            "mean_peak_emotion":    sum(peak_emotions) / max(1, len(peak_emotions)),
+            # M5 — variância emocional
             "emotion_variance":     sum((e - sum(emotions)/n)**2 for e in emotions) / n,
-
-            # Eficiência
+            # M6 — taxa de pânico
+            "panic_rate":           panic_reached_count / n,
+            # M8 — velocidade média (efeito FSM)
             "mean_speed_ratio":     sum(speeds) / max(1, n) / max(1.0, self.agents[0].base_speed),
+            # M9 — contato com hazard
+            "hazard_contact_rate":  hazard_touched_count / n,
+            # M10 — utilização de exits (Xu 2021)
+            "exit_utilization":     r_util,
         }
 
     # ------------------------------------------------------------------

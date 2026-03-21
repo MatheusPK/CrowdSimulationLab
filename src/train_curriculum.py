@@ -1,32 +1,41 @@
 """
 train_curriculum.py — treino DQN com currículo progressivo de 12 stages.
 
-Todos os mapas são plantas de edifícios reais (biblioteca, escritório, shopping, escola).
+Estratégia: MULTI-AGENT com PARAMETER SHARING
+  - Todos os agentes compartilham a mesma rede
+  - Cada agente contribui transições independentes ao replay buffer
+  - Captura dinâmicas coletivas: contágio emocional, densidade, congestionamento
 
-Uso:
-    python train_curriculum.py                         # treino completo
-    python train_curriculum.py --stage 5               # começa no stage 5
-    python train_curriculum.py --eval                  # avalia em todos os mapas eval
-    python train_curriculum.py --render                # com visualização
-    python train_curriculum.py --quiet                 # sem prints detalhados
+Currículo v2 — baseado na análise de lacunas vs literatura (Yang 2020, Xu 2021, Zhang 2021):
 
-Currículo — 12 stages, complexidade crescente:
-    Stage  1  library_small        pequeno, sem hazard, navegação pura
-    Stage  2  office_wing_small    pequeno, sem hazard, fileira de salas
-    Stage  3  mall_small           pequeno, sem hazard, shopping
-    Stage  4  school_small         pequeno, sem hazard, escola
-    Stage  5  library_medium       médio, hazard leve, 2 exits
-    Stage  6  mall_food_court      médio, hazard leve, praça central
-    Stage  7  school_floor         médio, hazard, corredores
-    Stage  8  office_wing_medium   médio, hazard, escritório completo
-    Stage  9  office_complex_real  médio, hazard perto do exit, L-shape
-    Stage 10  mall_medium          médio, hazard, shopping anel
-    Stage 11  library_hard         médio, gargalo interno + hazard
-    Stage 12  di_style             médio, auditório + salas satélite
+  Stages 1-3:  sem hazard — navegação pura, aprender estrutura de mapas
+  Stage  4:    primeiro hazard leve — ativar FSM pela primeira vez
+  Stage  5:    hazard médio, multi-exit — aprender a escolher exit
+  Stage  6:  ★ NOVO hazard_corridor_small — primeiro dilema rota-perigosa/rota-segura
+               Lacuna crítica do currículo anterior: nenhum mapa ensinava este padrão
+  Stages 7-8:  hazard em salas e corredores, layouts densos
+  Stage  9:  ★ NOVO hazard_bypass_medium — dilema de rota em escala média
+               H flanqueia exit principal, existe exit alternativo seguro
+  Stage  10:   mall_medium — ambiente aberto, hazard leve distribuído
+  Stage  11: ★ NOVO hazard_dense_office — alta densidade de hazard (8%)
+               Ponte entre treino (máx 1.6%) e eval mall_panic (13.9%)
+               Hazard distribuído em múltiplas salas (não bloco único)
+  Stage  12:   library_hard — gargalo + hazard, prep para library_bottleneck eval
+
+  Fine-tuning opcional (--fine-tune):
+    di_style — mapa estilo DI com hazard em posição superior, prep para di_emergency
 
 Promoção:
     evacuation_rate média ≥ 80% nos últimos 30 episódios → avança.
     Após PATIENCE episódios sem promoção → avança mesmo assim.
+
+Uso:
+    python train_curriculum.py                          # treino completo
+    python train_curriculum.py --stage 6                # começa no stage 6
+    python train_curriculum.py --eval                   # avalia nos 5 mapas eval
+    python train_curriculum.py --fine-tune              # fine-tuning em di_style após treino
+    python train_curriculum.py --render                 # com visualização
+    python train_curriculum.py --quiet                  # sem prints detalhados
 """
 
 import argparse
@@ -49,30 +58,51 @@ from simulation_params import (
     CURRICULUM_PATIENCE, CURRICULUM_SAVE_EVERY,
 )
 
-# ── Currículo ─────────────────────────────────────────────────────────────────
+# ── Currículo v2 ──────────────────────────────────────────────────────────────
 
 CURRICULUM = [
-    # (nome,               caminho,                                  n_agents, max_steps)
-    ("library_small",      "maps/train/library_small.txt",           4,  300),
-    ("office_wing_small",  "maps/train/office_wing_small.txt",       4,  300),
-    ("mall_small",         "maps/train/mall_small.txt",              4,  300),
-    ("school_small",       "maps/train/school_small.txt",            4,  300),
-    ("library_medium",     "maps/train/library_medium.txt",          6,  400),
-    ("mall_food_court",    "maps/train/mall_food_court.txt",         6,  400),
-    ("school_floor",       "maps/train/school_floor.txt",            6,  400),
-    ("office_wing_medium", "maps/train/office_wing_medium.txt",      6,  400),
-    ("office_complex_real","maps/train/office_complex_real.txt",     8,  450),
-    ("mall_medium",        "maps/train/mall_medium.txt",             8,  450),
-    ("library_hard",       "maps/train/library_hard.txt",            8,  450),
-    ("di_style",           "maps/train/di_style.txt",                8,  500),
+    # (nome, caminho, n_agents, max_steps)
+    #
+    # Progressão de agentes:
+    #   Stages 1-4  (small):   4 agentes  — mapas pequenos, 12-14 spawns disponíveis
+    #   Stages 5,7-8 (médio):  10 agentes — introduz dinâmica coletiva (Xu 2021: mín 10)
+    #   Stage 6     (small):   4 agentes  — mapa small, mantém 4
+    #   Stages 9-12 (médio):   12 agentes — contágio emocional consistente (Lv 2022: mín 12)
+    #
+    # Stages 1-3: navegação pura (sem hazard)
+    ("mall_small",            "maps/train/mall_small.txt",             4,  300),
+    ("school_small",          "maps/train/school_small.txt",           4,  300),
+    ("office_wing_small",     "maps/train/office_wing_small.txt",      4,  300),
+    # Stage 4: primeiro hazard leve
+    ("library_small",         "maps/train/library_small.txt",          4,  300),
+    # Stage 5: hazard médio, multi-exit — primeiro grupo de 10 agentes
+    ("library_medium",        "maps/train/library_medium.txt",        10,  400),
+    # Stage 6: ★ dilema rota-perigosa/rota-segura — mapa small, volta para 4
+    ("hazard_corridor_small", "maps/train/hazard_corridor_small.txt",  4,  350),
+    # Stages 7-8: hazard em layouts densos, 10 agentes
+    ("school_floor",          "maps/train/school_floor.txt",          10,  400),
+    ("office_wing_medium",    "maps/train/office_wing_medium.txt",    10,  400),
+    # Stage 9: ★ dilema de rota em escala média — sobe para 12 agentes
+    ("hazard_bypass_medium",  "maps/train/hazard_bypass_medium.txt",  12,  450),
+    # Stage 10: shopping anel, hazard distribuído, 12 agentes
+    ("mall_medium",           "maps/train/mall_medium.txt",           12,  450),
+    # Stage 11: ★ alta densidade de hazard — 12 agentes, contágio emocional ativo
+    ("hazard_dense_office",   "maps/train/hazard_dense_office.txt",   12,  450),
+    # Stage 12: gargalo + hazard — 12 agentes (prep para library_bottleneck eval)
+    ("library_hard",          "maps/train/library_hard.txt",          12,  450),
 ]
 
+# Fine-tuning opcional após treino principal
+FINE_TUNE_MAP = ("di_style", "maps/train/di_style.txt", 12, 500)
+
 EVAL_MAPS = [
-    ("library_bottleneck", "maps/eval/library_bottleneck.txt",  8, 450),
-    ("office_single_exit", "maps/eval/office_single_exit.txt",  8, 450),
-    ("mall_panic",         "maps/eval/mall_panic.txt",          8, 450),
-    ("school_evacuation",  "maps/eval/school_evacuation.txt",   8, 450),
-    ("di_emergency",       "maps/eval/di_emergency.txt",        8, 500),
+    # 12 agentes em todos os mapas eval — alinhado com literatura (Lv 2022, Xu 2021)
+    # Todos os mapas têm ≥ 15 spawns disponíveis (verificado)
+    ("library_bottleneck", "maps/eval/library_bottleneck.txt", 12, 450),
+    ("office_single_exit", "maps/eval/office_single_exit.txt", 12, 450),
+    ("mall_panic",         "maps/eval/mall_panic.txt",         12, 450),
+    ("school_evacuation",  "maps/eval/school_evacuation.txt",  12, 450),
+    ("di_emergency",       "maps/eval/di_emergency.txt",       12, 500),
 ]
 
 PROMOTION_THRESHOLD = CURRICULUM_PROMOTION_THRESHOLD
@@ -144,6 +174,11 @@ def build_renderer(env, title, fps=30):
 # ── Loop de episódio ──────────────────────────────────────────────────────────
 
 def run_episode(env, policy, renderer=None, train=True):
+    """
+    Multi-agent parameter sharing: todos os agentes usam a mesma policy
+    e contribuem transições independentes para o replay buffer compartilhado.
+    prev_obs é capturado ANTES de cada step (fix do bug de next_obs).
+    """
     obs_list = env.reset()
     prev_obs = {id(a): obs_list[i] for i, a in enumerate(env.agents)}
     ep_reward = 0.0
@@ -161,18 +196,20 @@ def run_episode(env, policy, renderer=None, train=True):
             if not a.evacuated else None
             for a in env.agents
         ]
+
         next_obs, rewards, done, _ = env.step(actions)
 
-        for a in env.agents:
-            a.update_peak_emotion()
-
+        # update_peak_emotion já é chamado dentro de environment.step()
         if train:
             for i, a in enumerate(env.agents):
                 if actions[i] is None:
                     continue
                 policy.store_transition(
-                    obs=prev_obs[id(a)], action=actions[i],
-                    reward=rewards[i], next_obs=next_obs[i], done=done,
+                    obs=prev_obs[id(a)],
+                    action=actions[i],
+                    reward=rewards[i],
+                    next_obs=next_obs[i],
+                    done=done,
                 )
 
         prev_obs = {id(a): next_obs[i] for i, a in enumerate(env.agents)}
@@ -187,10 +224,12 @@ def run_episode(env, policy, renderer=None, train=True):
 
 # ── Treino de um stage ────────────────────────────────────────────────────────
 
-def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True):
+def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
+                stage_label=None):
     name, map_path, n_agents, max_steps = CURRICULUM[stage_idx]
+    label = stage_label or f"Stage {stage_idx+1}"
     env = build_env(map_path, n_agents, max_steps)
-    renderer = build_renderer(env, f"Stage {stage_idx+1}: {name}") if render else None
+    renderer = build_renderer(env, f"{label}: {name}") if render else None
 
     recent = deque(maxlen=EVAL_WINDOW)
     ep_global = ep_global_start
@@ -198,15 +237,28 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True):
     promoted  = False
 
     if verbose:
-        print(f"\n{'='*55}")
-        print(f"STAGE {stage_idx+1}/12: {name}")
-        print(f"  {map_path}  agents={n_agents}  max_steps={max_steps}")
-        print(f"{'='*55}")
+        is_new = name in ("hazard_corridor_small", "hazard_bypass_medium",
+                          "hazard_dense_office")
+        marker = " ★" if is_new else ""
+        print(f"\n{'='*60}")
+        print(f"{label}/12: {name}{marker}")
+        print(f"  {map_path}")
+        print(f"  agents={n_agents}  max_steps={max_steps}  "
+              f"[multi-agent parameter sharing]")
+        if is_new:
+            descriptions = {
+                "hazard_corridor_small": "dilema rota-perigosa vs rota-segura",
+                "hazard_bypass_medium":  "H flanqueando exit, rota alternativa segura",
+                "hazard_dense_office":   "hazard distribuído (8%), prep para mall_panic",
+            }
+            print(f"  → {descriptions.get(name, '')}")
+        print(f"{'='*60}")
 
     while stage_ep < PATIENCE:
         m = run_episode(env, policy, renderer, train=True)
         recent.append(m["evacuation_rate"])
-        ep_global += 1; stage_ep += 1
+        ep_global += 1
+        stage_ep  += 1
 
         log_ep({
             "episode_global":    ep_global,
@@ -228,16 +280,19 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True):
             print(f"  [s{stage_idx+1}|ep{stage_ep:4d}|g{ep_global:5d}] "
                   f"evac={m['evacuation_rate']:.2f}  avg{EVAL_WINDOW}={avg:.2f}  "
                   f"reward={m['total_reward']:6.1f}  eps={policy.current_epsilon():.3f}  "
-                  f"emotion={m.get('mean_emotion_final',0):.2f}")
+                  f"emotion={m.get('mean_emotion_final',0):.2f}  "
+                  f"var={m.get('emotion_variance',0):.4f}")
 
         if stage_ep % SAVE_EVERY == 0:
             policy.save(str(MODEL_DIR / f"ckpt_s{stage_idx+1}_ep{ep_global}.pth"))
             save_state(stage_idx, ep_global)
 
-        if len(recent) >= EVAL_WINDOW and sum(recent)/len(recent) >= PROMOTION_THRESHOLD:
+        if (len(recent) >= EVAL_WINDOW
+                and sum(recent) / len(recent) >= PROMOTION_THRESHOLD):
             promoted = True
             if verbose:
-                print(f"\n  ✓ PROMOVIDO! avg={sum(recent)/len(recent):.2f}")
+                avg = sum(recent) / len(recent)
+                print(f"\n  ✓ PROMOVIDO! avg{EVAL_WINDOW}={avg:.2f}")
             break
 
     if renderer:
@@ -247,14 +302,84 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True):
     save_state(stage_idx + (1 if promoted else 0), ep_global)
 
     if verbose and not promoted:
-        print(f"\n  → Patience esgotada. Avançando.")
+        print(f"\n  → Patience esgotada ({PATIENCE} ep). Avançando.")
 
     return ep_global, promoted
+
+# ── Fine-tuning (di_style) ────────────────────────────────────────────────────
+
+def fine_tune(policy, ep_global_start, render=False, verbose=True):
+    """
+    Fine-tuning em di_style após o currículo principal.
+    Prepara especificamente para di_emergency (eval):
+    - Hazard na posição superior perto do exit
+    - Layout estilo DI com salas satélite
+    Roda por no máximo PATIENCE episódios sem critério de promoção.
+    """
+    name, map_path, n_agents, max_steps = FINE_TUNE_MAP
+    env = build_env(map_path, n_agents, max_steps)
+    renderer = build_renderer(env, f"Fine-tune: {name}") if render else None
+
+    ep_global = ep_global_start
+    recent = deque(maxlen=EVAL_WINDOW)
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"FINE-TUNING: {name}")
+        print(f"  Prep para di_emergency (eval) — hazard perto do exit superior")
+        print(f"{'='*60}")
+
+    for ft_ep in range(1, PATIENCE + 1):
+        m = run_episode(env, policy, renderer, train=True)
+        recent.append(m["evacuation_rate"])
+        ep_global += 1
+
+        log_ep({
+            "episode_global": ep_global, "stage": 13, "map_name": name,
+            "evacuation_rate": round(m["evacuation_rate"], 4),
+            "all_evacuated": int(m.get("all_evacuated", False)),
+            "mean_evac_time": round(m.get("mean_evacuation_time", max_steps), 2),
+            "steps": m.get("steps", max_steps),
+            "mean_emotion_final": round(m.get("mean_emotion_final", 0), 4),
+            "emotion_variance": round(m.get("emotion_variance", 0), 4),
+            "mean_speed_ratio": round(m.get("mean_speed_ratio", 1), 4),
+            "total_reward": round(m["total_reward"], 2),
+            "epsilon": round(policy.current_epsilon(), 4),
+        })
+
+        if verbose and ft_ep % 10 == 0:
+            avg = sum(recent) / len(recent)
+            print(f"  [ft|ep{ft_ep:4d}|g{ep_global:5d}] "
+                  f"evac={m['evacuation_rate']:.2f}  avg={avg:.2f}  "
+                  f"eps={policy.current_epsilon():.3f}")
+
+        if len(recent) >= EVAL_WINDOW and sum(recent) / len(recent) >= PROMOTION_THRESHOLD:
+            if verbose:
+                print(f"\n  ✓ Fine-tuning convergido!")
+            break
+
+    if renderer:
+        renderer.close()
+    policy.save(str(MODEL_PATH))
+    return ep_global
 
 # ── Avaliação ─────────────────────────────────────────────────────────────────
 
 def evaluate(model_path, n_episodes=20, render=False):
-    print(f"\n{'='*55}\nAVALIAÇÃO — {model_path}\n{'='*55}")
+    """
+    Avaliação completa nos 5 mapas eval.
+    Métricas reportadas:
+      - evacuation_rate: fração de agentes evacuados
+      - mean_emotion_final: nível emocional médio ao final
+      - emotion_variance: variância emocional entre agentes (fenômeno central)
+      - mean_evac_time: tempo médio de evacuação
+    """
+    print(f"\n{'='*60}")
+    print(f"AVALIAÇÃO — {model_path}")
+    print(f"{'='*60}")
+    print(f"{'Mapa':<25} {'evac':>6} {'panic':>6} {'peak_em':>8} {'haz_ct':>7} {'r_util':>7} {'var':>7} {'time':>6}")
+    print("-"*75)
+
     for name, map_path, n_agents, max_steps in EVAL_MAPS:
         env = build_env(map_path, n_agents, max_steps)
         policy = build_policy(env, model_path, DQNMode.EVAL)
@@ -263,21 +388,36 @@ def evaluate(model_path, n_episodes=20, render=False):
                    for _ in range(n_episodes)]
         if renderer:
             renderer.close()
-        avg_evac    = sum(r["evacuation_rate"] for r in results) / n_episodes
-        avg_emotion = sum(r.get("mean_emotion_final", 0) for r in results) / n_episodes
-        avg_time    = sum(r.get("mean_evacuation_time", max_steps) for r in results) / n_episodes
-        print(f"  {name:<25}  evac={avg_evac:.2f}  emotion={avg_emotion:.2f}  time={avg_time:.0f}")
+
+        N = max(1, n_episodes)
+        avg_evac   = sum(r["evacuation_rate"] for r in results) / N
+        avg_panic  = sum(r.get("panic_rate", 0) for r in results) / N
+        avg_pk_em  = sum(r.get("mean_peak_emotion", 0) for r in results) / N
+        avg_haz    = sum(r.get("hazard_contact_rate", 0) for r in results) / N
+        avg_rutil  = sum(r.get("exit_utilization", 0) for r in results) / N
+        avg_var    = sum(r.get("emotion_variance", 0) for r in results) / N
+        avg_time   = sum(r.get("mean_evacuation_time", max_steps) for r in results) / N
+        print(f"  {name:<23} {avg_evac:>6.2f} {avg_panic:>6.2f} {avg_pk_em:>8.3f} "              f"{avg_haz:>7.2f} {avg_rutil:>7.3f} {avg_var:>7.4f} {avg_time:>6.0f}")
+
+    print()
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--stage",    type=int, default=None)
-    p.add_argument("--eval",     action="store_true")
-    p.add_argument("--render",   action="store_true")
-    p.add_argument("--model",    type=str, default=str(MODEL_PATH))
-    p.add_argument("--episodes", type=int, default=20)
-    p.add_argument("--quiet",    action="store_true")
+    p = argparse.ArgumentParser(
+        description="Treino DQN+FSM com currículo progressivo v2"
+    )
+    p.add_argument("--stage",      type=int,  default=None,
+                   help="Começa no stage N (1-12)")
+    p.add_argument("--eval",       action="store_true",
+                   help="Avalia modelo nos 5 mapas eval")
+    p.add_argument("--fine-tune",  action="store_true",
+                   help="Fine-tuning em di_style após currículo principal")
+    p.add_argument("--render",     action="store_true")
+    p.add_argument("--model",      type=str,  default=str(MODEL_PATH))
+    p.add_argument("--episodes",   type=int,  default=20,
+                   help="Episódios para --eval")
+    p.add_argument("--quiet",      action="store_true")
     return p.parse_args()
 
 def main():
@@ -300,17 +440,30 @@ def main():
     env_init = build_env(map_path, n_agents, max_steps)
     policy   = build_policy(env_init, args.model, DQNMode.TRAIN)
 
-    print(f"[INFO] device={policy.device}")
-    print(f"[INFO] modelo={args.model}")
-    print(f"[INFO] stage inicial={start+1}  ep_global={ep_global}")
+    print(f"[INFO] device       = {policy.device}")
+    print(f"[INFO] modelo       = {args.model}")
+    print(f"[INFO] stage inicial = {start+1}  ep_global={ep_global}")
+    print(f"[INFO] estratégia   = multi-agent parameter sharing")
+    print(f"[INFO] epsilon_decay = {policy.epsilon_decay:,} transições")
 
-    for stage_idx in range(start, len(CURRICULUM)):
-        ep_global, _ = train_stage(
-            stage_idx, policy, ep_global,
-            render=args.render, verbose=not args.quiet,
+    # Treino principal
+    if not args.fine_tune:
+        for stage_idx in range(start, len(CURRICULUM)):
+            ep_global, _ = train_stage(
+                stage_idx, policy, ep_global,
+                render=args.render,
+                verbose=not args.quiet,
+            )
+
+    # Fine-tuning em di_style (opcional, após treino principal ou standalone)
+    if args.fine_tune:
+        ep_global = fine_tune(
+            policy, ep_global,
+            render=args.render,
+            verbose=not args.quiet,
         )
 
-    print(f"\n[DONE] Treino completo. Modelo: {MODEL_PATH}")
+    print(f"\n[DONE] Treino completo. Modelo salvo em: {MODEL_PATH}")
 
 if __name__ == "__main__":
     main()

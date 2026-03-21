@@ -35,9 +35,12 @@ class Agent:
         self.peak_emotion  = 0.0
 
         # Status
-        self.evacuated      = False
-        self.alive          = True
+        self.evacuated       = False
+        self.alive           = True
         self.evacuation_time = None
+        # Tracking para métricas de eval
+        self.touched_hazard  = False   # True se tocou H em algum momento do episódio
+        self.exit_used       = None    # Exit object usado para evacuar
 
         # Avoidance base (sobrescrito pelo update_fsm quando use_fsm=True)
         self.obstacle_avoidance_distance = OBSTACLE_AVOIDANCE_DISTANCE

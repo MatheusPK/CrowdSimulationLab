@@ -161,12 +161,13 @@ DQN_HIDDEN_DIM          = 128   # neurônios por camada oculta (2 camadas)
                                   # Diminuir para treino mais rápido (64)
 
 # Replay buffer
-DQN_BUFFER_CAPACITY     = 50_000  # transições armazenadas
-                                    # Aumentar → mais diversidade de experiências
-                                    # Diminuir → treino mais rápido, menos estável
+DQN_BUFFER_CAPACITY     = 100_000 # transições armazenadas
+                                    # Com N=12 agentes × 450 steps ≈ 3510 trans/ep.
+                                    # 100k ≈ 28 episódios de histórico — diversidade adequada.
+                                    # Aumentar para 200k se houver RAM disponível.
 
-DQN_TRAIN_START_SIZE    = 1_000   # buffer mínimo antes de começar os updates
-                                   # Deve ser ≥ batch_size
+DQN_TRAIN_START_SIZE    = 2_000   # buffer mínimo antes de começar os updates
+                                   # Com multi-agent, atinge esse valor em < 1 episódio.
 
 # Mini-batch
 DQN_BATCH_SIZE          = 64      # amostras por update de gradient
@@ -188,9 +189,18 @@ DQN_TARGET_UPDATE_FREQ  = 300     # updates de gradient entre cada sync da targe
 # Epsilon-greedy (exploração)
 DQN_EPSILON_START       = 1.0     # exploração inicial (100% aleatório)
 DQN_EPSILON_END         = 0.05    # exploração mínima (5% aleatório)
-DQN_EPSILON_DECAY       = 30_000  # steps para decair de start até end
-                                   # Aumentar → mais exploração por mais tempo
-                                   # Diminuir → explora menos, converge mais rápido
+DQN_EPSILON_DECAY       = 1_600_000 # steps (transições) para decair de start até end
+                                     #
+                                     # Calibrado para currículo de 12 stages com N=4→12 agentes:
+                                     #   Trans/ep (N=12, 450 steps): ~3510
+                                     #   Stages 1-4  (N=4,  300 steps):  ~780 trans/ep × 150ep ≈  468k
+                                     #   Stages 5-8  (N=10, 400 steps): ~2600 trans/ep × 150ep ≈ 1560k
+                                     #   Epsilon = 0.05 atingido ~no stage 10 (mall_medium)
+                                     #
+                                     # Isso garante ε≈0.15 no stage 9 (hazard_bypass_medium),
+                                     # onde o dilema de rota com 12 agentes precisa de exploração
+                                     # para descobrir a rota alternativa ao hazard.
+                                     # Com valor antigo (200k), epsilon virava 0.05 no stage 2.
 
 # Gradient clipping (estabiliza treino com reward shaping)
 DQN_GRAD_CLIP_NORM      = 10.0    # max_norm para clip_grad_norm_
@@ -218,15 +228,24 @@ DQN_GRAD_CLIP_NORM      = 10.0    # max_norm para clip_grad_norm_
 #     R += REWARD_DENSITY_SCALE × densidade_norm  (penalidade por aglomeração)
 
 # Camada 1 — navegação
-REWARD_PROGRESS_SCALE   = 10.0    # peso do progresso BFS em direção à saída
-                                   # Aumentar → sinal mais forte, pode dominar os outros
+REWARD_PROGRESS_SCALE   = 15.0    # peso do progresso BFS em direção à saída
+                                   # Aumentado de 10 → 15: com REWARD_NO_PROGRESS agora
+                                   # só em retrocesso real, o sinal de progresso precisa
+                                   # ser mais forte para superar o time_penalty de -0.05/step
 REWARD_EVACUATED        = 80.0    # recompensa terminal por evacuação bem-sucedida
 REWARD_TIME_PENALTY     = -0.05   # por step (urgência suave, não paralisa)
-REWARD_NO_PROGRESS      = -1.0    # se progress <= 0 e não evacuou
+REWARD_NO_PROGRESS      = -1.0    # se progress < -1e-4 (retrocesso real) e não evacuou
+                                   # NÃO é aplicado em estagnação (progress == 0):
+                                   # com VELOCITY_SMOOTHING=0.18 o agente leva ~4 steps
+                                   # para mudar de célula BFS — penalizar estagnação
+                                   # mascarava o sinal de progresso em ~94% dos steps.
 
 # Camada 2 — hazard e emoção
 REWARD_HAZARD_CONTACT   = -3.0    # por step dentro do hazard (forte e contínuo)
 REWARD_HAZARD_VISIBLE_CALM = 0.4  # bônus × (1 - emotion) ao ver hazard sem entrar
+                                   # ATENÇÃO: incentiva calma perto do hazard, não
+                                   # aproximação. Monitorar hazard_contact_rate nos
+                                   # stages 4-5; se subir, reduzir para 0.2 ou zerar.
 REWARD_HAZARD_PANIC     = -0.5    # penalidade por emotion > 0.5 perto do hazard
 
 # Camada 3 — interação social
@@ -240,5 +259,5 @@ REWARD_DENSITY_SCALE    = -0.1    # × densidade_norm (penaliza aglomeração ex
 
 CURRICULUM_PROMOTION_THRESHOLD = 0.80   # evacuation_rate média mínima para promover
 CURRICULUM_EVAL_WINDOW         = 30     # episódios na janela de avaliação
-CURRICULUM_PATIENCE            = 300    # episódios máximos por stage
+CURRICULUM_PATIENCE            = 500    # episódios máximos por stage
 CURRICULUM_SAVE_EVERY          = 50     # salva checkpoint a cada N episódios

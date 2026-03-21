@@ -3,6 +3,7 @@ import pygame
 
 from core.direction import DIRECTION_VECTORS
 from core.fsm_state import FSMState
+from simulation_params import FSM_CALM_TO_EVACUATE, FSM_EVACUATE_TO_PANIC
 
 
 # Paleta de cores por estado emocional (RGB)
@@ -26,16 +27,19 @@ def emotion_to_color(emotion_level: float) -> tuple[int, int, int]:
     Mapeia emotion_level [0, 1] para uma cor RGB com interpolação suave
     entre os três pontos da FSM:
 
-        0.0 → CALM     (azul claro)
-        0.3 → EVACUATE (azul médio)   ← limiar FSMState.EVACUATE
-        0.7 → PANIC    (roxo escuro)  ← limiar FSMState.PANIC
-        1.0 → PANIC    (roxo escuro)
+        0.0                    → CALM     (azul claro)
+        FSM_CALM_TO_EVACUATE   → EVACUATE (azul médio)   = 0.35
+        FSM_EVACUATE_TO_PANIC  → PANIC    (roxo escuro)  = 0.72
+        1.0                    → PANIC    (roxo escuro)
     """
-    if emotion_level <= 0.3:
-        t = emotion_level / 0.3
+    lo = FSM_CALM_TO_EVACUATE    # 0.35
+    hi = FSM_EVACUATE_TO_PANIC   # 0.72
+    if emotion_level <= lo:
+        t = emotion_level / max(lo, 1e-6)
         return _lerp_color(_COLOR_CALM, _COLOR_EVACUATE, t)
     else:
-        t = (emotion_level - 0.3) / 0.7
+        t = (emotion_level - lo) / max(hi - lo, 1e-6)
+        t = min(t, 1.0)
         return _lerp_color(_COLOR_EVACUATE, _COLOR_PANIC, t)
 
 

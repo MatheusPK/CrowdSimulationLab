@@ -45,7 +45,9 @@ def build_renderer(map_data, title: str) -> Renderer | None:
 
 def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
     """Roda um episódio completo e retorna as métricas."""
-    env.reset()
+    # FIX: captura obs ANTES do primeiro step para ter prev_obs correto
+    obs_list = env.reset()
+    prev_obs = {id(a): obs_list[i] for i, a in enumerate(env.agents)}
 
     done    = False
     running = True
@@ -62,15 +64,17 @@ def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
             for agent in env.agents
         ]
 
-        _, reward_list, done, _ = env.step(actions)
+        # FIX: env.step() retorna next_obs como primeiro elemento
+        next_obs_list, reward_list, done, _ = env.step(actions)
 
-        # rastreia pico emocional (necessário para métricas)
-        for agent in env.agents:
-            agent.update_peak_emotion()
-
+        # update_peak_emotion já chamado dentro de environment.step()
         if cfg.SCENARIO == AppScenario.DQN_FSM:
-            # armazena transições para treino inline (quando mode=TRAIN)
-            _store_transitions(env, policy, actions, reward_list, done)
+            # FIX: passa prev_obs e next_obs corretamente
+            _store_transitions(env, policy, actions, reward_list, done,
+                               prev_obs, next_obs_list)
+
+        # FIX: atualiza prev_obs com o estado pós-step
+        prev_obs = {id(a): next_obs_list[i] for i, a in enumerate(env.agents)}
 
         if renderer is not None:
             renderer.render(env)
@@ -78,19 +82,25 @@ def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
     return env.get_episode_metrics()
 
 
-def _store_transitions(env, policy, actions, reward_list, done):
-    """Armazena transições no replay buffer do DQN (só em mode=TRAIN)."""
+def _store_transitions(env, policy, actions, reward_list, done,
+                       prev_obs: dict, next_obs_list: list):
+    """
+    Armazena transições no replay buffer do DQN (só em mode=TRAIN).
+
+    FIX: antes, obs e next_obs apontavam para a mesma lista (estado pós-step),
+    corrompendo o target Q-value. Agora recebe prev_obs (estado pré-step)
+    e next_obs_list (estado pós-step) separados.
+    """
     if not hasattr(policy, "store_transition"):
         return
-    obs_list = [env.get_observation(a) for a in env.agents]
     for i, agent in enumerate(env.agents):
         if actions[i] is None:
             continue
         policy.store_transition(
-            obs=obs_list[i],
+            obs=prev_obs[id(agent)],
             action=actions[i],
             reward=reward_list[i],
-            next_obs=obs_list[i],
+            next_obs=next_obs_list[i],
             done=done,
         )
 
@@ -107,27 +117,36 @@ def init_log():
                 "scenario", "map", "episode",
                 "evacuation_rate", "all_evacuated",
                 "mean_evac_time", "steps",
-                "mean_emotion_final", "emotion_variance", "mean_speed_ratio",
+                "mean_emotion_final", "mean_peak_emotion", "emotion_variance",
+                "panic_rate", "hazard_contact_rate", "exit_utilization",
+                "mean_speed_ratio",
             ])
 
 def log_result(episode: int, metrics: dict):
+    fields = [
+        "scenario", "map", "episode",
+        "evacuation_rate", "all_evacuated",
+        "mean_evac_time", "steps",
+        "mean_emotion_final", "mean_peak_emotion", "emotion_variance",
+        "panic_rate", "hazard_contact_rate", "exit_utilization",
+        "mean_speed_ratio",
+    ]
     with open(LOG_PATH, "a", newline="") as f:
-        csv.DictWriter(f, fieldnames=[
-            "scenario", "map", "episode",
-            "evacuation_rate", "all_evacuated",
-            "mean_evac_time", "steps",
-            "mean_emotion_final", "emotion_variance", "mean_speed_ratio",
-        ]).writerow({
-            "scenario":          cfg.SCENARIO.value,
-            "map":               os.path.basename(cfg.MAP),
-            "episode":           episode,
-            "evacuation_rate":   round(metrics.get("evacuation_rate", 0), 4),
-            "all_evacuated":     int(metrics.get("all_evacuated", False)),
-            "mean_evac_time":    round(metrics.get("mean_evacuation_time", cfg.MAX_STEPS), 2),
-            "steps":             metrics.get("steps", cfg.MAX_STEPS),
-            "mean_emotion_final":round(metrics.get("mean_emotion_final", 0), 4),
-            "emotion_variance":  round(metrics.get("emotion_variance", 0), 4),
-            "mean_speed_ratio":  round(metrics.get("mean_speed_ratio", 1), 4),
+        csv.DictWriter(f, fieldnames=fields).writerow({
+            "scenario":            cfg.SCENARIO.value,
+            "map":                 os.path.basename(cfg.MAP),
+            "episode":             episode,
+            "evacuation_rate":     round(metrics.get("evacuation_rate", 0), 4),
+            "all_evacuated":       int(metrics.get("all_evacuated", False)),
+            "mean_evac_time":      round(metrics.get("mean_evacuation_time", cfg.MAX_STEPS), 2),
+            "steps":               metrics.get("steps", cfg.MAX_STEPS),
+            "mean_emotion_final":  round(metrics.get("mean_emotion_final", 0), 4),
+            "mean_peak_emotion":   round(metrics.get("mean_peak_emotion", 0), 4),
+            "emotion_variance":    round(metrics.get("emotion_variance", 0), 4),
+            "panic_rate":          round(metrics.get("panic_rate", 0), 4),
+            "hazard_contact_rate": round(metrics.get("hazard_contact_rate", 0), 4),
+            "exit_utilization":    round(metrics.get("exit_utilization", 0), 4),
+            "mean_speed_ratio":    round(metrics.get("mean_speed_ratio", 1), 4),
         })
 
 
@@ -182,7 +201,6 @@ def main():
         num_agents=cfg.AGENTS,
     )
 
-    # PolicyFactory agora recebe cfg diretamente
     policy = PolicyFactory.build(env)
 
     renderer = build_renderer(map_data, title=f"{cfg.SCENARIO.value} | {os.path.basename(cfg.MAP)}")
@@ -203,7 +221,6 @@ def main():
         if args.log:
             log_result(ep, metrics)
 
-        # Salva DQN periodicamente durante treino inline
         if (cfg.SCENARIO == AppScenario.DQN_FSM
                 and cfg.DQN["mode"] == DQNMode.TRAIN
                 and ep % 50 == 0):

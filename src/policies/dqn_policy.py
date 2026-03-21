@@ -74,12 +74,12 @@ class DQNPolicy:
         batch_size: int = 64,
         gamma: float = 0.99,
         lr: float = 1e-3,
-        buffer_capacity: int = 50_000,
+        buffer_capacity: int = 100_000,
         target_update_freq: int = 300,
-        train_start_size: int = 1_000,
+        train_start_size: int = 2_000,   # alinhado com DQN_TRAIN_START_SIZE em simulation_params
         epsilon_start: float = 1.0,
         epsilon_end: float = 0.05,
-        epsilon_decay: int = 30_000,
+        epsilon_decay: int = 1_600_000,
         device: str | None = None,
     ):
         self.mode = mode
@@ -144,9 +144,12 @@ class DQNPolicy:
             return
 
         self.buffer.push(obs, action, reward, next_obs, done)
-        self.steps_done += 1
 
+        # FIX: só conta steps_done (para epsilon decay) depois que o treino
+        # começa de fato. Antes disso, o agente está em exploração pura e
+        # epsilon deveria permanecer em 1.0 para maximizar diversidade inicial.
         if len(self.buffer) >= self.train_start_size:
+            self.steps_done += 1
             self._update()
 
     def save(self, path: str | None = None):
