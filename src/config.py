@@ -64,7 +64,7 @@ ALL_MAPS = {
 }
 
 SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
-MAP      = ALL_MAPS["di_emergency"]         # <-- mapa
+MAP      = ALL_MAPS["mall_panic"]         # <-- mapa
 AGENTS   = 10                             # <-- número de agentes
 
 # ── Parâmetros gerais ─────────────────────────────────────────────────────────

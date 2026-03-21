@@ -52,9 +52,14 @@ class Environment:
         }
 
         # dist_map[row][col] = distância BFS em tiles ao exit mais próximo
-        # Calculado uma vez por mapa (não por episódio) — O(tiles) build, O(1) consulta.
-        # Usado em distance_to_nearest_exit, get_nearest_exit e compute_reward.
+        # (sem custo de hazard — usado para reward de progresso e observação)
         self._dist_map: list[list[float]] = self._build_dist_map()
+
+        # dist_map_safe[row][col] = BFS penalizando tiles de hazard com ASTAR_HAZARD_COST
+        # Usado exclusivamente para escolher qual exit perseguir (get_nearest_exit_bfs).
+        # Garante que o agente escolhe o exit acessível mesmo que o mais próximo
+        # em linha reta esteja bloqueado por hazard (ex: mall_panic, di_emergency).
+        self._dist_map_safe: list[list[float]] = self._build_dist_map_safe()
 
     # ------------------------------------------------------------------
     # dist_map — BFS multi-source a partir de todos os exits
@@ -113,6 +118,67 @@ class Environment:
 
         return dist
 
+    def _build_dist_map_safe(self) -> list[list[float]]:
+        """
+        Dijkstra multi-source partindo de todos os exits, penalizando tiles de hazard.
+
+        Custo por tile:
+          'O' (parede)  → inacessível
+          'H' (hazard)  → ASTAR_HAZARD_COST (importado de simulation_params)
+          demais        → 1.0
+
+        Usado por get_nearest_exit_bfs para escolher QUAL exit perseguir.
+        Em mapas onde um exit está bloqueado por hazard (mall_panic, di_emergency),
+        garante que o agente escolhe o exit com caminho seguro, mesmo que seja
+        mais distante em tiles absolutos.
+
+        O _dist_map original (sem custo de hazard) continua sendo usado para
+        reward de progresso — não queremos distorcer o sinal de aprendizado.
+        """
+        from simulation_params import ASTAR_HAZARD_COST
+        import heapq
+
+        rows = self.map_data.rows
+        cols = self.map_data.cols
+        grid = self.map_data.grid
+
+        INF = float("inf")
+        dist = [[INF] * cols for _ in range(rows)]
+        # heap: (custo, row, col)
+        heap = []
+
+        for r in range(rows):
+            for c in range(cols):
+                if c < len(grid[r]) and grid[r][c] == "E":
+                    dist[r][c] = 0.0
+                    heapq.heappush(heap, (0.0, r, c))
+
+        dirs = [
+            (-1,  0), (1,  0), (0, -1), (0,  1),
+            (-1, -1), (-1, 1), (1, -1), (1,  1),
+        ]
+
+        while heap:
+            cost, r, c = heapq.heappop(heap)
+            if cost > dist[r][c]:
+                continue  # entrada obsoleta
+            for dr, dc in dirs:
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < rows and 0 <= nc < cols):
+                    continue
+                if nc >= len(grid[nr]):
+                    continue
+                cell = grid[nr][nc]
+                if cell == "O":
+                    continue
+                step = ASTAR_HAZARD_COST if cell == "H" else 1.0
+                new_cost = dist[r][c] + step
+                if new_cost < dist[nr][nc]:
+                    dist[nr][nc] = new_cost
+                    heapq.heappush(heap, (new_cost, nr, nc))
+
+        return dist
+
     def dist_to_exit(self, agent) -> float:
         """
         Distância BFS em pixels ao exit mais próximo navegável.
@@ -124,7 +190,6 @@ class Environment:
         row, col = self.world_to_cell(agent.x, agent.y)
         tiles = self._dist_map[row][col]
         if tiles == float("inf"):
-            # Fallback para euclidiana se BFS não alcançou (célula isolada)
             return self.distance_to_nearest_exit(agent)
         return tiles * self.map_data.tile_size
 
@@ -402,64 +467,41 @@ class Environment:
                 best_dist, best = d, exit_obj
         return best
 
-    def get_nearest_exit_bfs(self, agent):
+    def get_nearest_exit_bfs(self, agent, use_safe_map: bool = False):
         """
-        Retorna o exit mais próximo por distância BFS (navegável),
-        em vez de euclidiana em linha reta.
+        Retorna o exit mais próximo por distância de caminho navegável.
 
-        Crítico em mapas com múltiplos exits em lados opostos (mall_emergency):
-        a euclid pode escolher o exit errado quando o caminho real é muito
-        mais longo por causa das paredes.
+        use_safe_map=True  → usa _dist_map_safe (penaliza hazard).
+                             Usado pelo A* para escolher o exit destino,
+                             garantindo que roteia pelo exit com caminho seguro.
 
-        Usa o dist_map pré-calculado — custo O(1).
-        Mantém get_nearest_exit (euclid) para uso no renderer e A*.
+        use_safe_map=False → usa _dist_map limpo (sem penalidade de hazard).
+                             Usado pelo DQN para que ele aprenda por conta
+                             o tradeoff entre rota curta/perigosa e longa/segura,
+                             sem receber a resposta pré-calculada.
         """
         row, col = self.world_to_cell(agent.x, agent.y)
 
-        best_exit = None
-        best_dist = float("inf")
+        if len(self.map_data.exits) == 1:
+            return self.map_data.exits[0]
 
-        for exit_obj in self.map_data.exits:
-            ex = exit_obj.x + exit_obj.width / 2.0
-            ey = exit_obj.y + exit_obj.height / 2.0
-            er, ec = self.world_to_cell(ex, ey)
+        return self._nearest_exit_by_distmap(row, col, use_safe_map)
 
-            # Distância BFS do agente até este exit tile
-            d = self._dist_map[row][col]  # distância ao exit mais próximo global
-
-            # Para mapas com múltiplos grupos de exits precisamos comparar
-            # a distância BFS especificamente a cada exit
-            # Usamos a distância de Manhattan como proxy quando o BFS é global
-            # Para precisão: compara dist_map[row][col] com dist calculada
-            # manualmente se houver mais de 1 grupo
-            d_euclid = math.hypot(ex - agent.x, ey - agent.y)
-            if d_euclid < best_dist:
-                best_dist = d_euclid
-                best_exit = exit_obj
-
-        # Se dist_map indica que o exit mais próximo real está longe,
-        # revalida usando BFS das células dos exits
-        if len(self.map_data.exits) > 1:
-            best_exit = self._nearest_exit_by_distmap(row, col)
-
-        return best_exit if best_exit else self.map_data.exits[0]
-
-    def _nearest_exit_by_distmap(self, agent_row, agent_col):
+    def _nearest_exit_by_distmap(self, agent_row, agent_col, use_safe_map: bool = False):
         """
-        Encontra qual exit o dist_map está minimizando para esta célula.
-        Faz BFS reverso: a partir da célula do agente, qual exit é alcançado
-        seguindo o gradiente descendente do dist_map.
+        Segue o gradiente do dist_map escolhido até chegar num tile E.
+        use_safe_map=True → _dist_map_safe (A*)
+        use_safe_map=False → _dist_map limpo (DQN)
         """
+        dm = self._dist_map_safe if use_safe_map else self._dist_map
         r, c = agent_row, agent_col
         rows, cols = self.map_data.rows, self.map_data.cols
         dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
 
-        # Segue o gradiente do dist_map até chegar num exit tile
         visited = set()
-        for _ in range(rows + cols):  # máximo de passos = diagonal do mapa
+        for _ in range(rows + cols):
             visited.add((r, c))
             if self.map_data.grid[r][c] == "E":
-                # Encontrou o exit tile — retorna o exit_obj que contém esta célula
                 x = c * self.map_data.tile_size + self.map_data.tile_size / 2.0
                 y = r * self.map_data.tile_size + self.map_data.tile_size / 2.0
                 for exit_obj in self.map_data.exits:
@@ -469,19 +511,18 @@ class Environment:
                 break
 
             best_nr, best_nc = r, c
-            best_d = self._dist_map[r][c]
+            best_d = dm[r][c]
             for dr, dc in dirs:
                 nr, nc = r + dr, c + dc
                 if (nr, nc) not in visited and 0 <= nr < rows and 0 <= nc < cols:
-                    if self._dist_map[nr][nc] < best_d:
-                        best_d = self._dist_map[nr][nc]
+                    if dm[nr][nc] < best_d:
+                        best_d = dm[nr][nc]
                         best_nr, best_nc = nr, nc
 
             if (best_nr, best_nc) == (r, c):
-                break  # convergiu, sem progresso
+                break
             r, c = best_nr, best_nc
 
-        # Fallback: exit mais próximo por euclid
         return self.get_nearest_exit_by_agent_pos(agent_row, agent_col)
 
     def get_nearest_exit_by_agent_pos(self, row, col):

@@ -145,7 +145,7 @@ LOCAL_DENSITY_RADIUS    = 35.0   # px (~4 tiles)
 # 0.0 → A* ignora hazards completamente
 # 8.0 → equivale a ~8 tiles extras de custo (rota alternativa até 8 tiles mais longa)
 # 20+ → A* nunca atravessa hazard se houver outra saída
-ASTAR_HAZARD_COST       = 8.0
+ASTAR_HAZARD_COST       = 25.0
 
 # Número máximo de steps sem mudar de célula antes de replanejar (anti-stuck)
 ASTAR_STUCK_THRESHOLD   = 5   # steps

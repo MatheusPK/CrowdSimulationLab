@@ -69,6 +69,13 @@ class AStarPolicy:
         if agent.evacuated:
             return None
 
+        # O A* sempre usa o exit com caminho mais seguro (penalizando hazard),
+        # independente do exit_obj passado pelo main.py (que usa euclidiana).
+        # Isso garante que em mapas com hazard bloqueando uma saída (mall_panic,
+        # di_emergency) o A* roteia pelo exit acessível, não pelo mais próximo.
+        if len(env.map_data.exits) > 1:
+            exit_obj = env.get_nearest_exit_bfs(agent, use_safe_map=True)
+
         planner = self._get_planner(env, agent)
 
         start_cell = env.world_to_cell(agent.x, agent.y)
