@@ -41,6 +41,13 @@ from environment.environment import Environment
 from environment.map_loader import load_map
 from policies.dqn_policy import DQNPolicy
 from rendering.renderer import Renderer
+from simulation_params import (
+    DQN_HIDDEN_DIM, DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR,
+    DQN_BUFFER_CAPACITY, DQN_TARGET_UPDATE_FREQ, DQN_TRAIN_START_SIZE,
+    DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY,
+    CURRICULUM_PROMOTION_THRESHOLD, CURRICULUM_EVAL_WINDOW,
+    CURRICULUM_PATIENCE, CURRICULUM_SAVE_EVERY,
+)
 
 # ── Currículo ─────────────────────────────────────────────────────────────────
 
@@ -68,10 +75,10 @@ EVAL_MAPS = [
     ("di_emergency",       "maps/eval/di_emergency.txt",        8, 500),
 ]
 
-PROMOTION_THRESHOLD = 0.80
-EVAL_WINDOW         = 30
-PATIENCE            = 300
-SAVE_EVERY          = 50
+PROMOTION_THRESHOLD = CURRICULUM_PROMOTION_THRESHOLD
+EVAL_WINDOW         = CURRICULUM_EVAL_WINDOW
+PATIENCE            = CURRICULUM_PATIENCE
+SAVE_EVERY          = CURRICULUM_SAVE_EVERY
 
 MODEL_DIR  = Path("models")
 LOG_DIR    = Path("logs")
@@ -80,10 +87,11 @@ LOG_PATH   = LOG_DIR / "training_log.csv"
 STATE_PATH = MODEL_DIR / "curriculum_state.json"
 
 DQN_CFG = dict(
-    hidden_dim=128, batch_size=64, gamma=0.99, lr=1e-3,
-    buffer_capacity=50_000, target_update_freq=300,
-    train_start_size=1_000, epsilon_start=1.0,
-    epsilon_end=0.05, epsilon_decay=30_000,
+    hidden_dim=DQN_HIDDEN_DIM, batch_size=DQN_BATCH_SIZE,
+    gamma=DQN_GAMMA, lr=DQN_LR,
+    buffer_capacity=DQN_BUFFER_CAPACITY, target_update_freq=DQN_TARGET_UPDATE_FREQ,
+    train_start_size=DQN_TRAIN_START_SIZE, epsilon_start=DQN_EPSILON_START,
+    epsilon_end=DQN_EPSILON_END, epsilon_decay=DQN_EPSILON_DECAY,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

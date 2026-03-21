@@ -16,6 +16,12 @@ Para treino DQN com currículo progressivo:
 
 from core.app_scenario import AppScenario
 from core.dqn_mode import DQNMode
+from simulation_params import (
+    ASTAR_HAZARD_COST,
+    DQN_HIDDEN_DIM, DQN_BUFFER_CAPACITY, DQN_TRAIN_START_SIZE,
+    DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR, DQN_TARGET_UPDATE_FREQ,
+    DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY,
+)
 
 # ── Mapas de treino (usados pelo currículo em train_curriculum.py) ────────────
 
@@ -49,32 +55,17 @@ EVAL_MAPS = {
     "di_emergency":       "maps/eval/di_emergency.txt",
 }
 
-ALL_MAPS = [
-    "maps/train/library_small.txt",
-    "maps/train/office_wing_small.txt",
-    "maps/train/mall_small.txt",
-    "maps/train/school_small.txt",
-    "maps/train/library_medium.txt",
-    "maps/train/mall_food_court.txt",
-    "maps/train/school_floor.txt",
-    "maps/train/office_wing_medium.txt",    
-    "maps/train/office_complex_real.txt",
-    "maps/train/mall_medium.txt",
-    "maps/train/library_hard.txt",
-    "maps/train/di_style.txt",
-    "maps/eval/library_bottleneck.txt",
-    "maps/eval/office_single_exit.txt",
-    "maps/eval/mall_panic.txt",
-    "maps/eval/school_evacuation.txt",
-    "maps/eval/di_emergency.txt",
-    "maps/DI_primeiro_andar.txt",
-]
+# ── Todos os mapas (treino + eval + real) — para testes rápidos no main.py ────
 
-# ── Configuração ativa  <-- edite aqui ───────────────────────────────────────
+ALL_MAPS = {
+    **TRAIN_MAPS,
+    **EVAL_MAPS,
+    "di_primeiro_andar": "maps/DI_primeiro_andar.txt",
+}
 
 SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
-MAP      = ALL_MAPS[16] #TRAIN_MAPS["library_hard"]         # <-- mapa
-AGENTS   = 15                             # <-- número de agentes
+MAP      = ALL_MAPS["di_emergency"]         # <-- mapa
+AGENTS   = 10                             # <-- número de agentes
 
 # ── Parâmetros gerais ─────────────────────────────────────────────────────────
 
@@ -83,7 +74,7 @@ FPS           = 30
 DT            = 0.1
 MAX_STEPS     = 400
 EVAL_EPISODES = 10
-ASTAR_HAZARD_COST = 8.0
+ASTAR_HAZARD_COST = ASTAR_HAZARD_COST  # importado de simulation_params
 
 # ── Parâmetros DQN ────────────────────────────────────────────────────────────
 
@@ -91,14 +82,14 @@ DQN = {
     "mode":               DQNMode.EVAL,
     "model_path":         "models/dqn_fsm.pth",
     "episodes":           500,
-    "hidden_dim":         128,
-    "batch_size":         64,
-    "gamma":              0.99,
-    "lr":                 1e-3,
-    "buffer_capacity":    50_000,
-    "target_update_freq": 300,
-    "train_start_size":   1_000,
-    "epsilon_start":      1.0,
-    "epsilon_end":        0.05,
-    "epsilon_decay":      30_000,
+    "hidden_dim":         DQN_HIDDEN_DIM,
+    "batch_size":         DQN_BATCH_SIZE,
+    "gamma":              DQN_GAMMA,
+    "lr":                 DQN_LR,
+    "buffer_capacity":    DQN_BUFFER_CAPACITY,
+    "target_update_freq": DQN_TARGET_UPDATE_FREQ,
+    "train_start_size":   DQN_TRAIN_START_SIZE,
+    "epsilon_start":      DQN_EPSILON_START,
+    "epsilon_end":        DQN_EPSILON_END,
+    "epsilon_decay":      DQN_EPSILON_DECAY,
 }

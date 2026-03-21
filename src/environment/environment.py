@@ -4,9 +4,28 @@ from collections import deque
 from core.direction import Direction
 from core.fsm_state import FSMState
 from entities.agent import Agent
-
-# Raio (em pixels) dentro do qual um hazard é considerado "visível" pelo agente
-HAZARD_VISION_RADIUS = 5 * 8  # 5 tiles × tile_size
+from simulation_params import (
+    HAZARD_VISION_RADIUS,
+    LOCAL_DENSITY_RADIUS,
+    CONTAGION_RADIUS,
+    EMOTION_DECAY,
+    EMOTION_DELTA_HAZARD_CONTACT,
+    EMOTION_DELTA_HAZARD_VISIBLE,
+    EMOTION_DELTA_CONTAGION,
+    FSM_CALM_TO_EVACUATE, FSM_EVACUATE_TO_CALM,
+    FSM_EVACUATE_TO_PANIC, FSM_PANIC_TO_EVACUATE,
+    FSM_SPEED_CALM, FSM_SPEED_EVACUATE, FSM_SPEED_PANIC,
+    FSM_SPEED_SMOOTHING,
+    FSM_CALM_OBS_DIST, FSM_CALM_OBS_STR, FSM_CALM_AGENT_DIST,
+    FSM_CALM_AGENT_STR, FSM_CALM_VEL_SMOOTH,
+    FSM_EVAC_OBS_DIST, FSM_EVAC_OBS_STR, FSM_EVAC_AGENT_DIST,
+    FSM_EVAC_AGENT_STR, FSM_EVAC_VEL_SMOOTH,
+    FSM_PANIC_OBS_DIST, FSM_PANIC_OBS_STR, FSM_PANIC_AGENT_DIST,
+    FSM_PANIC_AGENT_STR, FSM_PANIC_VEL_SMOOTH,
+    REWARD_PROGRESS_SCALE, REWARD_EVACUATED, REWARD_TIME_PENALTY,
+    REWARD_NO_PROGRESS, REWARD_HAZARD_CONTACT, REWARD_HAZARD_VISIBLE_CALM,
+    REWARD_HAZARD_PANIC, REWARD_COLLISION, REWARD_DENSITY_SCALE,
+)
 
 
 class Environment:
@@ -484,7 +503,8 @@ class Environment:
         cy = exit_obj.y + exit_obj.height / 2.0
         return math.hypot(cx - agent.x, cy - agent.y)
 
-    def local_density(self, agent, radius=40.0):
+    def local_density(self, agent, radius=None):
+        radius = radius if radius is not None else LOCAL_DENSITY_RADIUS
         count = 0
         for other in self.agents:
             if other is agent or other.evacuated:
@@ -514,84 +534,64 @@ class Environment:
     # ------------------------------------------------------------------
 
     def update_emotion(self, agent):
-        """
-        Emoção com contágio ponderado pelo estado emocional dos vizinhos.
-
-        Deltas:
-          -0.02 / step    decaimento passivo (tende à calma)
-          +0.15           contato direto com hazard
-          +0.08           hazard visível mas sem contato
-          +0.04 × avg_neighbor_emotion   contágio emocional real
-        """
-        delta = -0.02
+        delta = EMOTION_DECAY
 
         if self.touches_hazard(agent):
-            delta += 0.15
+            delta += EMOTION_DELTA_HAZARD_CONTACT
         elif self.hazard_visible(agent):
-            delta += 0.08
+            delta += EMOTION_DELTA_HAZARD_VISIBLE
 
-        # Contágio ponderado — quanto mais em pânico os vizinhos, maior o contagio
         neighbors = [
             o for o in self.agents
             if o is not agent and not o.evacuated
-            and math.hypot(agent.x - o.x, agent.y - o.y) <= 35.0
+            and math.hypot(agent.x - o.x, agent.y - o.y) <= CONTAGION_RADIUS
         ]
         if neighbors:
             avg_neighbor_emotion = sum(o.emotion_level for o in neighbors) / len(neighbors)
-            delta += 0.04 * avg_neighbor_emotion
+            delta += EMOTION_DELTA_CONTAGION * avg_neighbor_emotion
 
         agent.emotion_level = max(0.0, min(1.0, agent.emotion_level + delta))
 
     def update_fsm(self, agent):
-        """
-        FSM com histerese nos limiares para evitar oscilações.
-
-        Thresholds de subida ligeiramente maiores que os de descida:
-          CALM → EVACUATE : emotion ≥ 0.35
-          EVACUATE → CALM : emotion < 0.25
-          EVACUATE → PANIC: emotion ≥ 0.72
-          PANIC → EVACUATE: emotion < 0.62
-        """
         state = agent.state
 
         if state == FSMState.CALM:
-            if agent.emotion_level >= 0.35:
+            if agent.emotion_level >= FSM_CALM_TO_EVACUATE:
                 agent.state = FSMState.EVACUATE
         elif state == FSMState.EVACUATE:
-            if agent.emotion_level >= 0.72:
+            if agent.emotion_level >= FSM_EVACUATE_TO_PANIC:
                 agent.state = FSMState.PANIC
-            elif agent.emotion_level < 0.25:
+            elif agent.emotion_level < FSM_EVACUATE_TO_CALM:
                 agent.state = FSMState.CALM
         elif state == FSMState.PANIC:
-            if agent.emotion_level < 0.62:
+            if agent.emotion_level < FSM_PANIC_TO_EVACUATE:
                 agent.state = FSMState.EVACUATE
 
-        # Parâmetros comportamentais por estado
         if agent.state == FSMState.CALM:
-            target_speed = agent.base_speed
-            agent.obstacle_avoidance_distance = 16.0
-            agent.obstacle_avoidance_strength = 80.0
-            agent.agent_avoidance_distance = 14.0
-            agent.agent_avoidance_strength = 95.0
-            agent.velocity_smoothing = 0.20
+            target_speed = agent.base_speed * FSM_SPEED_CALM
+            agent.obstacle_avoidance_distance = FSM_CALM_OBS_DIST
+            agent.obstacle_avoidance_strength = FSM_CALM_OBS_STR
+            agent.agent_avoidance_distance    = FSM_CALM_AGENT_DIST
+            agent.agent_avoidance_strength    = FSM_CALM_AGENT_STR
+            agent.velocity_smoothing          = FSM_CALM_VEL_SMOOTH
 
         elif agent.state == FSMState.EVACUATE:
-            target_speed = agent.base_speed * 1.15
-            agent.obstacle_avoidance_distance = 12.0
-            agent.obstacle_avoidance_strength = 70.0
-            agent.agent_avoidance_distance = 10.0
-            agent.agent_avoidance_strength = 85.0
-            agent.velocity_smoothing = 0.16
+            target_speed = agent.base_speed * FSM_SPEED_EVACUATE
+            agent.obstacle_avoidance_distance = FSM_EVAC_OBS_DIST
+            agent.obstacle_avoidance_strength = FSM_EVAC_OBS_STR
+            agent.agent_avoidance_distance    = FSM_EVAC_AGENT_DIST
+            agent.agent_avoidance_strength    = FSM_EVAC_AGENT_STR
+            agent.velocity_smoothing          = FSM_EVAC_VEL_SMOOTH
 
         else:  # PANIC
-            target_speed = agent.base_speed * 1.30
-            agent.obstacle_avoidance_distance = 8.0
-            agent.obstacle_avoidance_strength = 55.0
-            agent.agent_avoidance_distance = 7.0
-            agent.agent_avoidance_strength = 70.0
-            agent.velocity_smoothing = 0.10
+            target_speed = agent.base_speed * FSM_SPEED_PANIC
+            agent.obstacle_avoidance_distance = FSM_PANIC_OBS_DIST
+            agent.obstacle_avoidance_strength = FSM_PANIC_OBS_STR
+            agent.agent_avoidance_distance    = FSM_PANIC_AGENT_DIST
+            agent.agent_avoidance_strength    = FSM_PANIC_AGENT_STR
+            agent.velocity_smoothing          = FSM_PANIC_VEL_SMOOTH
 
-        agent.current_speed += (target_speed - agent.current_speed) * 0.2
+        agent.current_speed += (target_speed - agent.current_speed) * FSM_SPEED_SMOOTHING
 
     # ------------------------------------------------------------------
     # Observação — 17 features
@@ -651,7 +651,7 @@ class Environment:
         haz_dist_norm = min(1.0, haz_dist / max(1.0, max_hazard_dist))
 
         in_hazard = 1.0 if self.touches_hazard(agent) else 0.0
-        density = self.local_density(agent, radius=35.0)
+        density = self.local_density(agent)
 
         nearest_obs = self._nearest_obstacle_dist(agent)
         nearest_obs_norm = min(1.0, nearest_obs / max(1.0, agent.obstacle_avoidance_distance * 2))
@@ -681,68 +681,31 @@ class Environment:
     # ------------------------------------------------------------------
 
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:
-        """
-        Reward em três camadas:
-
-        CAMADA 1 — navegação (sinal principal, sempre presente)
-          + 10.0 × progresso normalizado em direção à saída
-            (normalizado pela diagonal do mapa para ser invariante ao tamanho)
-          + 80.0  evacuou com sucesso
-          - 0.05  time penalty por step (urgência suave)
-          - 1.0   step sem progredir (ficou parado ou andou para trás)
-
-        CAMADA 2 — hazard (sinal de perigo, modelando comportamento emocional)
-          - 3.0   por step dentro do hazard (penalidade forte e contínua)
-          - 0.5   por step com hazard visível E emotion_level > 0.5
-                  (penaliza pânico perto do perigo — agente deve se afastar, não congelar)
-          + 0.4 × (1 - emotion_level) se hazard visível
-                  (bônus por manter calma ao ver o hazard — reforça FSM calm)
-
-        CAMADA 3 — interação social
-          - 0.3   por colisão com parede ou agente
-          - 0.1 × densidade_normalizada  (suave penalidade por aglomeração extrema)
-                  (incentiva dispersão, consistente com modelo de multidão)
-
-        Decisões de design:
-        - O progresso é normalizado pela diagonal para que o mesmo comportamento
-          produza rewards similares em mapas small (50 tiles) e medium (100 tiles).
-          Sem isso, o DQN aprenderia velocidades diferentes por mapa.
-        - A penalidade de "step sem progredir" substitui a penalidade quadrática de distância:
-          é mais suave e não bloqueia exploração inicial.
-        - As camadas 2 e 3 têm magnitude menor que camada 1 para não sobrepor o sinal
-          principal de navegação durante as primeiras fases do currículo.
-        """
         max_dist = math.hypot(self.map_data.width, self.map_data.height)
 
-        # ── Camada 1: navegação ──
-        reward = -0.05  # time penalty
+        reward = REWARD_TIME_PENALTY
 
         progress = (prev_dist - new_dist) / max(1.0, max_dist)
-        reward += 10.0 * progress
+        reward += REWARD_PROGRESS_SCALE * progress
 
         if agent.evacuated:
-            reward += 80.0
+            reward += REWARD_EVACUATED
 
-        # Penalidade por não progredir (progress muito negativo ou ~zero)
         if progress <= 0.0 and not agent.evacuated:
-            reward -= 1.0
+            reward += REWARD_NO_PROGRESS
 
-        # ── Camada 2: hazard e emoção ──
         if self.touches_hazard(agent):
-            reward -= 3.0
+            reward += REWARD_HAZARD_CONTACT
         elif self.hazard_visible(agent):
-            # Bônus por manter calma ao ver o hazard (reforça FSM)
-            reward += 0.4 * (1.0 - agent.emotion_level)
-            # Penalidade por pânico prolongado perto do hazard (não progride)
+            reward += REWARD_HAZARD_VISIBLE_CALM * (1.0 - agent.emotion_level)
             if agent.emotion_level > 0.5:
-                reward -= 0.5
+                reward += REWARD_HAZARD_PANIC
 
-        # ── Camada 3: interação social ──
         if collided:
-            reward -= 0.3
+            reward += REWARD_COLLISION
 
-        density_norm = min(1.0, self.local_density(agent, radius=35.0) / 8.0)
-        reward -= 0.1 * density_norm
+        density_norm = min(1.0, self.local_density(agent) / 8.0)
+        reward += REWARD_DENSITY_SCALE * density_norm
 
         return reward
 
@@ -788,7 +751,7 @@ class Environment:
 
         emotions = [a.emotion_level for a in self.agents]
         panic_reached = [a for a in self.agents if hasattr(a, 'peak_emotion')
-                         and a.peak_emotion >= 0.72]
+                         and a.peak_emotion >= FSM_EVACUATE_TO_PANIC]
 
         speeds = [a.current_speed for a in self.agents]
 

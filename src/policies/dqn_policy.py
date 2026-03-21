@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from core.dqn_mode import DQNMode
+from simulation_params import DQN_GRAD_CLIP_NORM
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +194,7 @@ class DQNPolicy:
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
+        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=DQN_GRAD_CLIP_NORM)
         self.optimizer.step()
 
         self.update_count += 1

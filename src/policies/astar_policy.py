@@ -1,13 +1,13 @@
 import math
 
 from environment.astar import AStarPlanner
+from simulation_params import ASTAR_HAZARD_COST, ASTAR_STUCK_THRESHOLD
 
-# Quantos steps consecutivos sem mudar de célula antes de replanear
-_STUCK_THRESHOLD = 5
+_STUCK_THRESHOLD = ASTAR_STUCK_THRESHOLD
 
 
 class AStarPolicy:
-    def __init__(self, hazard_cost=8.0):
+    def __init__(self, hazard_cost=ASTAR_HAZARD_COST):
         self.hazard_cost = hazard_cost
         self.planner_cache = {}
         self.path_cache = {}

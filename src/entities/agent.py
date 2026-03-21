@@ -1,5 +1,15 @@
 from core.direction import Direction
 from core.fsm_state import FSMState
+from simulation_params import (
+    AGENT_RADIUS,
+    PLANNER_RADIUS_MARGIN,
+    AGENT_BASE_SPEED,
+    OBSTACLE_AVOIDANCE_DISTANCE,
+    OBSTACLE_AVOIDANCE_STRENGTH,
+    AGENT_AVOIDANCE_DISTANCE,
+    AGENT_AVOIDANCE_STRENGTH,
+    VELOCITY_SMOOTHING,
+)
 
 
 class Agent:
@@ -8,37 +18,33 @@ class Agent:
         self.y = float(y)
 
         # Geometria
-        self.radius = 6.0
-        self.planner_radius_margin = 5.0
+        self.radius               = AGENT_RADIUS
+        self.planner_radius_margin = PLANNER_RADIUS_MARGIN
 
         # Movimento
-        self.base_speed = 50.0
+        self.base_speed    = AGENT_BASE_SPEED
         self.current_speed = self.base_speed
         self.vx = 0.0
         self.vy = 0.0
         self.last_action = 0
 
         # Direção / estado
-        self.direction = Direction.N
-        self.state = FSMState.CALM
+        self.direction    = Direction.N
+        self.state        = FSMState.CALM
         self.emotion_level = 0.0
-        self.peak_emotion = 0.0  # máximo emotion_level atingido no episódio
+        self.peak_emotion  = 0.0
 
         # Status
-        self.evacuated = False
-        self.alive = True
-        self.evacuation_time = None  # step em que evacuou (None se não evacuou)
+        self.evacuated      = False
+        self.alive          = True
+        self.evacuation_time = None
 
-        # Avoidance de obstáculos
-        self.obstacle_avoidance_distance = 14.0
-        self.obstacle_avoidance_strength = 70.0
-
-        # Avoidance de outros agentes
-        self.agent_avoidance_distance = 12.0
-        self.agent_avoidance_strength = 90.0
-
-        # Suavização da velocidade
-        self.velocity_smoothing = 0.18
+        # Avoidance base (sobrescrito pelo update_fsm quando use_fsm=True)
+        self.obstacle_avoidance_distance = OBSTACLE_AVOIDANCE_DISTANCE
+        self.obstacle_avoidance_strength = OBSTACLE_AVOIDANCE_STRENGTH
+        self.agent_avoidance_distance    = AGENT_AVOIDANCE_DISTANCE
+        self.agent_avoidance_strength    = AGENT_AVOIDANCE_STRENGTH
+        self.velocity_smoothing          = VELOCITY_SMOOTHING
 
     def apply_position(self, x: float, y: float):
         self.x = float(x)
@@ -49,6 +55,5 @@ class Agent:
         self.vy = 0.0
 
     def update_peak_emotion(self):
-        """Atualiza o pico emocional — chame após update_emotion no environment."""
         if self.emotion_level > self.peak_emotion:
             self.peak_emotion = self.emotion_level
