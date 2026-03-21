@@ -39,7 +39,6 @@ class AStarPolicy:
     def _is_stuck(self, cached, start_cell):
         """
         Detecta se o agente está preso: não mudou de célula por _STUCK_THRESHOLD steps.
-        Atualiza o contador no cache e retorna True quando o limite é atingido.
         """
         if cached is None:
             return False
@@ -55,8 +54,7 @@ class AStarPolicy:
     def _find_closest_path_index(self, path, start_cell):
         """
         Encontra o índice do ponto no path mais próximo da célula atual do agente
-        usando distância de Manhattan. Isso substitui o while loop frágil do
-        código original, que esgotava o índice quando o agente escorregava de tile.
+        usando distância de Manhattan.
         """
         best_idx = 0
         best_dist = float("inf")
@@ -74,6 +72,9 @@ class AStarPolicy:
         planner = self._get_planner(env, agent)
 
         start_cell = env.world_to_cell(agent.x, agent.y)
+
+        # goal_cell ainda é calculado para compatibilidade com o cache key,
+        # mas o A* vai usar exit_obj para determinar a approach cell real.
         exit_cx = exit_obj.x + exit_obj.width / 2.0
         exit_cy = exit_obj.y + exit_obj.height / 2.0
         goal_cell = env.world_to_cell(exit_cx, exit_cy)
@@ -90,7 +91,10 @@ class AStarPolicy:
         )
 
         if need_replan:
-            path = planner.find_path(start_cell, goal_cell)
+            # FIX: passa exit_obj para que o A* use get_exit_approach_cell
+            # em vez de find_nearest_valid_goal, garantindo que o goal
+            # calculado realmente permite ao agente tocar o tile de saída.
+            path = planner.find_path(start_cell, goal_cell, exit_obj=exit_obj)
 
             if not path or len(path) < 2:
                 return self.fallback_action_towards_exit(agent, exit_obj)
@@ -105,13 +109,12 @@ class AStarPolicy:
 
         path = cached["path"]
 
-        # Encontra onde o agente está no path por proximidade (robusto a deslizamento)
+        # Encontra onde o agente está no path por proximidade
         closest_idx = self._find_closest_path_index(path, start_cell)
 
         # Pega o próximo waypoint à frente
         next_idx = min(closest_idx + 1, len(path) - 1)
 
-        # Se já chegamos no fim do path, usa fallback
         if next_idx == closest_idx:
             return self.fallback_action_towards_exit(agent, exit_obj)
 

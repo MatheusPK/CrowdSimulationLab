@@ -1,24 +1,42 @@
+"""
+map_loader.py — lê um arquivo .txt e constrói o MapData.
+
+Legenda de tiles:
+    O  parede / obstáculo
+    .  espaço livre
+    E  exit (saída de evacuação)
+    H  hazard (perigo — incêndio, fumaça, etc.)
+    S  spawn (posição inicial de agente)
+"""
+
 from entities.obstacle import Obstacle
 from entities.exit import Exit
 from entities.hazard import Hazard
 from core.map_data import MapData
 
-TILE_SIZE = 8
+TILE_SIZE = 8  # pixels por tile
 
-def load_map(file_path):
+
+def load_map(file_path: str) -> MapData:
     map_data = MapData()
     map_data.tile_size = TILE_SIZE
 
-    with open(file_path, "r", encoding="utf-8") as file:
-        lines = [line.rstrip("\n") for line in file]
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = [line.rstrip("\n") for line in f]
 
     map_data.rows = len(lines)
-    map_data.cols = len(lines[0]) if lines else 0
-    map_data.width = map_data.cols * TILE_SIZE
+    # cols = largura da linha mais longa (robusto a linhas irregulares)
+    map_data.cols = max(len(line) for line in lines) if lines else 0
+    map_data.width  = map_data.cols * TILE_SIZE
     map_data.height = map_data.rows * TILE_SIZE
-    map_data.grid = [list(line) for line in lines]
 
-    for row, line in enumerate(lines):
+    # Garante que todas as linhas têm o mesmo comprimento
+    map_data.grid = [
+        list(line.ljust(map_data.cols, "O"))
+        for line in lines
+    ]
+
+    for row, line in enumerate(map_data.grid):
         for col, char in enumerate(line):
             x = col * TILE_SIZE
             y = row * TILE_SIZE

@@ -152,6 +152,8 @@ class Renderer:
 
     def _draw_agents(self, env):
         for agent in env.agents:
+            if agent.evacuated:
+                continue  # agente saiu do ambiente — não renderizar
             self._draw_agent(agent)
 
     def _draw_agent(self, agent):

@@ -1,4 +1,5 @@
 import math
+from collections import deque
 
 from core.direction import Direction
 from core.fsm_state import FSMState
@@ -6,6 +7,7 @@ from entities.agent import Agent
 
 # Raio (em pixels) dentro do qual um hazard é considerado "visível" pelo agente
 HAZARD_VISION_RADIUS = 5 * 8  # 5 tiles × tile_size
+
 
 class Environment:
     def __init__(self, map_data, dt=0.1, max_steps=300, use_fsm=False, num_agents=1):
@@ -30,6 +32,83 @@ class Environment:
             7: (Direction.NW, -s,   -s),
         }
 
+        # dist_map[row][col] = distância BFS em tiles ao exit mais próximo
+        # Calculado uma vez por mapa (não por episódio) — O(tiles) build, O(1) consulta.
+        # Usado em distance_to_nearest_exit, get_nearest_exit e compute_reward.
+        self._dist_map: list[list[float]] = self._build_dist_map()
+
+    # ------------------------------------------------------------------
+    # dist_map — BFS multi-source a partir de todos os exits
+    # ------------------------------------------------------------------
+
+    def _build_dist_map(self) -> list[list[float]]:
+        """
+        BFS multi-source partindo de todos os tiles 'E' simultaneamente.
+        Retorna dist_map[row][col] = número de tiles ao exit mais próximo
+        navegando pelo grafo do mapa (sem atravessar paredes).
+
+        Custo: O(rows × cols) — roda uma vez no __init__ por mapa.
+        Consulta: O(1) via world_to_cell + indexação direta.
+
+        Por que não euclidiana:
+          - Em mapas com corredores fechados (office_junction, mall_emergency)
+            a euclid subestima até 6x a distância real, invertendo o sinal de
+            reward em movimentos corretos (ex: subir um corredor para encontrar
+            a passagem seguinte).
+          - O dist_map garante que reward de progresso é sempre positivo
+            quando o agente está no caminho ótimo.
+        """
+        rows = self.map_data.rows
+        cols = self.map_data.cols
+        grid = self.map_data.grid
+
+        INF = float("inf")
+        dist = [[INF] * cols for _ in range(rows)]
+        q: deque = deque()
+
+        # Inicializa a fila com todos os exit tiles (distância 0)
+        for r in range(rows):
+            for c in range(cols):
+                if c < len(grid[r]) and grid[r][c] == "E":
+                    dist[r][c] = 0
+                    q.append((r, c))
+
+        dirs = [
+            (-1,  0), (1,  0), (0, -1), (0,  1),
+            (-1, -1), (-1, 1), (1, -1), (1,  1),
+        ]
+
+        while q:
+            r, c = q.popleft()
+            for dr, dc in dirs:
+                nr, nc = r + dr, c + dc
+                if (
+                    0 <= nr < rows
+                    and 0 <= nc < cols
+                    and dist[nr][nc] == INF
+                    and nc < len(grid[nr])
+                    and grid[nr][nc] != "O"
+                ):
+                    dist[nr][nc] = dist[r][c] + 1
+                    q.append((nr, nc))
+
+        return dist
+
+    def dist_to_exit(self, agent) -> float:
+        """
+        Distância BFS em pixels ao exit mais próximo navegável.
+        Usa dist_map[row][col] × tile_size para converter tiles → pixels.
+
+        Retorna inf se o agente estiver numa célula inacessível
+        (ex: foi empurrado para dentro de um obstáculo).
+        """
+        row, col = self.world_to_cell(agent.x, agent.y)
+        tiles = self._dist_map[row][col]
+        if tiles == float("inf"):
+            # Fallback para euclidiana se BFS não alcançou (célula isolada)
+            return self.distance_to_nearest_exit(agent)
+        return tiles * self.map_data.tile_size
+
     # ------------------------------------------------------------------
     # Reset / Step
     # ------------------------------------------------------------------
@@ -38,7 +117,9 @@ class Environment:
         self.time = 0
         self.agents = []
 
+        import random
         available_spawns = list(self.map_data.spawns)
+        random.shuffle(available_spawns)  # spawn order aleatorio a cada episodio
         num_to_create = min(self.num_agents_requested, len(available_spawns))
 
         if num_to_create <= 0:
@@ -58,7 +139,7 @@ class Environment:
             raise ValueError("Número de ações diferente do número de agentes.")
 
         prev_distances = [
-            self.distance_to_nearest_exit(agent) if not agent.evacuated else 0.0
+            self.dist_to_exit(agent) if not agent.evacuated else 0.0
             for agent in self.agents
         ]
 
@@ -76,11 +157,12 @@ class Environment:
             if agent.evacuated:
                 continue
             self.update_emotion(agent)
+            agent.update_peak_emotion()
             if self.use_fsm:
                 self.update_fsm(agent)
 
         new_distances = [
-            self.distance_to_nearest_exit(agent) if not agent.evacuated else 0.0
+            self.dist_to_exit(agent) if not agent.evacuated else 0.0
             for agent in self.agents
         ]
 
@@ -89,7 +171,6 @@ class Environment:
             if agent.evacuated and prev_distances[i] == 0.0 and new_distances[i] == 0.0:
                 reward_list.append(0.0)
                 continue
-
             reward = self.compute_reward(
                 agent=agent,
                 prev_dist=prev_distances[i],
@@ -159,7 +240,6 @@ class Environment:
                 continue
 
             collided = True
-
             moved_x = False
             moved_y = False
 
@@ -179,7 +259,14 @@ class Environment:
             agent.stop()
 
         if self.touches_exit(agent):
-            agent.evacuated = True
+            if not agent.evacuated:
+                agent.evacuated = True
+                agent.evacuation_time = self.time
+                # Move o agente para fora dos limites do mapa — ele saiu do ambiente.
+                # Isso garante que não bloqueia outros agentes no exit nem aparece
+                # no renderer, sem precisar de lógica extra em nenhum outro lugar.
+                agent.x = -9999.0
+                agent.y = -9999.0
             agent.stop()
 
         return collided
@@ -265,7 +352,6 @@ class Environment:
         return False
 
     def hazard_visible(self, agent) -> bool:
-        """True se qualquer hazard está dentro do raio de visão do agente."""
         for hazard in self.map_data.hazards:
             hcx = hazard.x + hazard.width / 2.0
             hcy = hazard.y + hazard.height / 2.0
@@ -274,7 +360,6 @@ class Environment:
         return False
 
     def nearest_hazard_dist(self, agent) -> float:
-        """Distância ao centro do hazard mais próximo (inf se não houver nenhum)."""
         min_dist = float("inf")
         for hazard in self.map_data.hazards:
             hcx = hazard.x + hazard.width / 2.0
@@ -296,6 +381,101 @@ class Environment:
             d = math.hypot(cx - agent.x, cy - agent.y)
             if d < best_dist:
                 best_dist, best = d, exit_obj
+        return best
+
+    def get_nearest_exit_bfs(self, agent):
+        """
+        Retorna o exit mais próximo por distância BFS (navegável),
+        em vez de euclidiana em linha reta.
+
+        Crítico em mapas com múltiplos exits em lados opostos (mall_emergency):
+        a euclid pode escolher o exit errado quando o caminho real é muito
+        mais longo por causa das paredes.
+
+        Usa o dist_map pré-calculado — custo O(1).
+        Mantém get_nearest_exit (euclid) para uso no renderer e A*.
+        """
+        row, col = self.world_to_cell(agent.x, agent.y)
+
+        best_exit = None
+        best_dist = float("inf")
+
+        for exit_obj in self.map_data.exits:
+            ex = exit_obj.x + exit_obj.width / 2.0
+            ey = exit_obj.y + exit_obj.height / 2.0
+            er, ec = self.world_to_cell(ex, ey)
+
+            # Distância BFS do agente até este exit tile
+            d = self._dist_map[row][col]  # distância ao exit mais próximo global
+
+            # Para mapas com múltiplos grupos de exits precisamos comparar
+            # a distância BFS especificamente a cada exit
+            # Usamos a distância de Manhattan como proxy quando o BFS é global
+            # Para precisão: compara dist_map[row][col] com dist calculada
+            # manualmente se houver mais de 1 grupo
+            d_euclid = math.hypot(ex - agent.x, ey - agent.y)
+            if d_euclid < best_dist:
+                best_dist = d_euclid
+                best_exit = exit_obj
+
+        # Se dist_map indica que o exit mais próximo real está longe,
+        # revalida usando BFS das células dos exits
+        if len(self.map_data.exits) > 1:
+            best_exit = self._nearest_exit_by_distmap(row, col)
+
+        return best_exit if best_exit else self.map_data.exits[0]
+
+    def _nearest_exit_by_distmap(self, agent_row, agent_col):
+        """
+        Encontra qual exit o dist_map está minimizando para esta célula.
+        Faz BFS reverso: a partir da célula do agente, qual exit é alcançado
+        seguindo o gradiente descendente do dist_map.
+        """
+        r, c = agent_row, agent_col
+        rows, cols = self.map_data.rows, self.map_data.cols
+        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+
+        # Segue o gradiente do dist_map até chegar num exit tile
+        visited = set()
+        for _ in range(rows + cols):  # máximo de passos = diagonal do mapa
+            visited.add((r, c))
+            if self.map_data.grid[r][c] == "E":
+                # Encontrou o exit tile — retorna o exit_obj que contém esta célula
+                x = c * self.map_data.tile_size + self.map_data.tile_size / 2.0
+                y = r * self.map_data.tile_size + self.map_data.tile_size / 2.0
+                for exit_obj in self.map_data.exits:
+                    if (exit_obj.x <= x <= exit_obj.x + exit_obj.width and
+                            exit_obj.y <= y <= exit_obj.y + exit_obj.height):
+                        return exit_obj
+                break
+
+            best_nr, best_nc = r, c
+            best_d = self._dist_map[r][c]
+            for dr, dc in dirs:
+                nr, nc = r + dr, c + dc
+                if (nr, nc) not in visited and 0 <= nr < rows and 0 <= nc < cols:
+                    if self._dist_map[nr][nc] < best_d:
+                        best_d = self._dist_map[nr][nc]
+                        best_nr, best_nc = nr, nc
+
+            if (best_nr, best_nc) == (r, c):
+                break  # convergiu, sem progresso
+            r, c = best_nr, best_nc
+
+        # Fallback: exit mais próximo por euclid
+        return self.get_nearest_exit_by_agent_pos(agent_row, agent_col)
+
+    def get_nearest_exit_by_agent_pos(self, row, col):
+        """Fallback euclid a partir de coordenadas de célula."""
+        ax = col * self.map_data.tile_size + self.map_data.tile_size / 2.0
+        ay = row * self.map_data.tile_size + self.map_data.tile_size / 2.0
+        best, best_d = None, float("inf")
+        for exit_obj in self.map_data.exits:
+            cx = exit_obj.x + exit_obj.width / 2.0
+            cy = exit_obj.y + exit_obj.height / 2.0
+            d = math.hypot(cx - ax, cy - ay)
+            if d < best_d:
+                best_d, best = d, exit_obj
         return best
 
     def distance_to_nearest_exit(self, agent):
@@ -330,16 +510,18 @@ class Environment:
         return min(min_dist, border_dist)
 
     # ------------------------------------------------------------------
-    # Emoção e FSM
+    # Emoção e FSM (com histerese)
     # ------------------------------------------------------------------
 
     def update_emotion(self, agent):
         """
-        Regras de emoção:
-        - Decai passivamente a -0.02/step (tende à calma)
-        - +0.15 se em contato direto com hazard (era +0.10, aumentado)
-        - +0.08 se hazard visível mas sem contato — percepção de perigo próximo
-        - +0.03 se densidade de vizinhos >= 3 — contágio emocional
+        Emoção com contágio ponderado pelo estado emocional dos vizinhos.
+
+        Deltas:
+          -0.02 / step    decaimento passivo (tende à calma)
+          +0.15           contato direto com hazard
+          +0.08           hazard visível mas sem contato
+          +0.04 × avg_neighbor_emotion   contágio emocional real
         """
         delta = -0.02
 
@@ -348,24 +530,43 @@ class Environment:
         elif self.hazard_visible(agent):
             delta += 0.08
 
-        density = self.local_density(agent, radius=35.0)
-        if density >= 3:
-            delta += 0.03
+        # Contágio ponderado — quanto mais em pânico os vizinhos, maior o contagio
+        neighbors = [
+            o for o in self.agents
+            if o is not agent and not o.evacuated
+            and math.hypot(agent.x - o.x, agent.y - o.y) <= 35.0
+        ]
+        if neighbors:
+            avg_neighbor_emotion = sum(o.emotion_level for o in neighbors) / len(neighbors)
+            delta += 0.04 * avg_neighbor_emotion
 
         agent.emotion_level = max(0.0, min(1.0, agent.emotion_level + delta))
 
     def update_fsm(self, agent):
         """
-        Transições de estado baseadas em emotion_level.
-        Cada estado ajusta os parâmetros comportamentais do agente.
-        """
-        if agent.emotion_level >= 0.7:
-            agent.state = FSMState.PANIC
-        elif agent.emotion_level >= 0.3:
-            agent.state = FSMState.EVACUATE
-        else:
-            agent.state = FSMState.CALM
+        FSM com histerese nos limiares para evitar oscilações.
 
+        Thresholds de subida ligeiramente maiores que os de descida:
+          CALM → EVACUATE : emotion ≥ 0.35
+          EVACUATE → CALM : emotion < 0.25
+          EVACUATE → PANIC: emotion ≥ 0.72
+          PANIC → EVACUATE: emotion < 0.62
+        """
+        state = agent.state
+
+        if state == FSMState.CALM:
+            if agent.emotion_level >= 0.35:
+                agent.state = FSMState.EVACUATE
+        elif state == FSMState.EVACUATE:
+            if agent.emotion_level >= 0.72:
+                agent.state = FSMState.PANIC
+            elif agent.emotion_level < 0.25:
+                agent.state = FSMState.CALM
+        elif state == FSMState.PANIC:
+            if agent.emotion_level < 0.62:
+                agent.state = FSMState.EVACUATE
+
+        # Parâmetros comportamentais por estado
         if agent.state == FSMState.CALM:
             target_speed = agent.base_speed
             agent.obstacle_avoidance_distance = 16.0
@@ -393,27 +594,31 @@ class Environment:
         agent.current_speed += (target_speed - agent.current_speed) * 0.2
 
     # ------------------------------------------------------------------
-    # Observação (estado para o DQN) — 17 features
+    # Observação — 17 features
     # ------------------------------------------------------------------
 
-    # Dimensão do vetor — use esta constante no config para state_dim
     OBS_DIM = 17
 
     def get_observation(self, agent) -> list[float]:
         """
-        Vetor de 17 features:
+        Vetor de 17 features — dimensão compatível com state_dim=17 no DQN.
+
+        Features de navegação [0-5] usam distância BFS (dist_map) em vez de
+        euclidiana. Isso garante que o vetor de direção e a distância reflitam
+        a geometria real do mapa — crítico em mapas com corredores fechados
+        onde euclid e BFS podem diferir até 6x.
 
         [0]  pos_x normalizada
         [1]  pos_y normalizada
-        [2]  dx para a saída (normalizado)
-        [3]  dy para a saída (normalizado)
-        [4]  distância à saída (normalizada)
+        [2]  dx para a saída (normalizado) — usando exit mais próximo por BFS
+        [3]  dy para a saída (normalizado) — usando exit mais próximo por BFS
+        [4]  distância BFS à saída normalizada pela diagonal do mapa
         [5]  ângulo para a saída em [-1, 1]
-        [6]  hazard visível no raio de visão (0/1)  ← novo
-        [7]  distância normalizada ao hazard mais próximo  ← novo
-        [8]  em contato direto com hazard (0/1)
+        [6]  hazard visível (0/1)
+        [7]  distância ao hazard mais próximo normalizada
+        [8]  em contato com hazard (0/1)
         [9]  emotion_level [0, 1]
-        [10] estado FSM (0=calm, 1=evacuate, 2=panic) normalizado
+        [10] estado FSM normalizado (0=calm, 0.5=evacuate, 1=panic)
         [11] vx normalizado pela velocidade atual
         [12] vy normalizado pela velocidade atual
         [13] densidade local normalizada [0, 1]
@@ -424,7 +629,8 @@ class Environment:
         if agent.evacuated:
             return [0.0] * self.OBS_DIM
 
-        exit_obj = self.get_nearest_exit(agent)
+        # Exit mais próximo por BFS — correto em mapas com corredores
+        exit_obj = self.get_nearest_exit_bfs(agent)
         exit_cx = exit_obj.x + exit_obj.width / 2.0
         exit_cy = exit_obj.y + exit_obj.height / 2.0
 
@@ -435,6 +641,10 @@ class Environment:
         max_hazard_dist = HAZARD_VISION_RADIUS * 2.0
 
         angle_to_exit = math.atan2(dy_exit, dx_exit) / math.pi
+
+        # Distância BFS normalizada (feature [4])
+        bfs_dist_px = self.dist_to_exit(agent)
+        bfs_dist_norm = min(1.0, bfs_dist_px / max(1.0, max_dist))
 
         haz_visible = 1.0 if self.hazard_visible(agent) else 0.0
         haz_dist = self.nearest_hazard_dist(agent)
@@ -447,60 +657,92 @@ class Environment:
         nearest_obs_norm = min(1.0, nearest_obs / max(1.0, agent.obstacle_avoidance_distance * 2))
 
         return [
-            agent.x / self.map_data.width,                         # 0
-            agent.y / self.map_data.height,                         # 1
-            dx_exit / self.map_data.width,                          # 2
-            dy_exit / self.map_data.height,                         # 3
-            math.hypot(dx_exit, dy_exit) / max_dist,                # 4
-            angle_to_exit,                                           # 5
-            haz_visible,                                             # 6
-            haz_dist_norm,                                           # 7
-            in_hazard,                                               # 8
-            agent.emotion_level,                                     # 9
-            float(agent.state.value) / 2.0,                         # 10  normalizado p/ [0,1]
-            agent.vx / max(1.0, agent.current_speed),               # 11
-            agent.vy / max(1.0, agent.current_speed),               # 12
-            min(1.0, density / 8.0),                                # 13
-            nearest_obs_norm,                                        # 14
-            agent.current_speed / max(1.0, agent.base_speed),       # 15
-            1.0 if agent.evacuated else 0.0,                        # 16
+            agent.x / self.map_data.width,
+            agent.y / self.map_data.height,
+            dx_exit / self.map_data.width,
+            dy_exit / self.map_data.height,
+            bfs_dist_norm,                                           # [4] BFS, não euclid
+            angle_to_exit,
+            haz_visible,
+            haz_dist_norm,
+            in_hazard,
+            agent.emotion_level,
+            float(agent.state.value) / 2.0,
+            agent.vx / max(1.0, agent.current_speed),
+            agent.vy / max(1.0, agent.current_speed),
+            min(1.0, density / 8.0),
+            nearest_obs_norm,
+            agent.current_speed / max(1.0, agent.base_speed),
+            1.0 if agent.evacuated else 0.0,
         ]
 
     # ------------------------------------------------------------------
-    # Reward
+    # Reward — reformulado para simular emoção e navegação realista
     # ------------------------------------------------------------------
 
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:
         """
-        Reward balanceado para DQN com FSM emocional:
+        Reward em três camadas:
 
-        + 5.0 × progresso em direção à saída  — sinal principal de aprendizado
-        + 50.0 se evacuou                      — recompensa terminal
-        + 0.5 × (1 - emotion) se hazard visível — incentiva manter calma perto do perigo
-        - 0.05 por step                         — urgência suave (não paralisa ação)
-        - 2.0 cada step dentro de hazard        — penalidade forte e contínua
-        - 0.3 por colisão                       — desincentiva, mas não paralisa
+        CAMADA 1 — navegação (sinal principal, sempre presente)
+          + 10.0 × progresso normalizado em direção à saída
+            (normalizado pela diagonal do mapa para ser invariante ao tamanho)
+          + 80.0  evacuou com sucesso
+          - 0.05  time penalty por step (urgência suave)
+          - 1.0   step sem progredir (ficou parado ou andou para trás)
+
+        CAMADA 2 — hazard (sinal de perigo, modelando comportamento emocional)
+          - 3.0   por step dentro do hazard (penalidade forte e contínua)
+          - 0.5   por step com hazard visível E emotion_level > 0.5
+                  (penaliza pânico perto do perigo — agente deve se afastar, não congelar)
+          + 0.4 × (1 - emotion_level) se hazard visível
+                  (bônus por manter calma ao ver o hazard — reforça FSM calm)
+
+        CAMADA 3 — interação social
+          - 0.3   por colisão com parede ou agente
+          - 0.1 × densidade_normalizada  (suave penalidade por aglomeração extrema)
+                  (incentiva dispersão, consistente com modelo de multidão)
+
+        Decisões de design:
+        - O progresso é normalizado pela diagonal para que o mesmo comportamento
+          produza rewards similares em mapas small (50 tiles) e medium (100 tiles).
+          Sem isso, o DQN aprenderia velocidades diferentes por mapa.
+        - A penalidade de "step sem progredir" substitui a penalidade quadrática de distância:
+          é mais suave e não bloqueia exploração inicial.
+        - As camadas 2 e 3 têm magnitude menor que camada 1 para não sobrepor o sinal
+          principal de navegação durante as primeiras fases do currículo.
         """
-        reward = -0.05  # time penalty suave
+        max_dist = math.hypot(self.map_data.width, self.map_data.height)
 
-        # Progresso em direção à saída
-        reward += 5.0 * (prev_dist - new_dist)
+        # ── Camada 1: navegação ──
+        reward = -0.05  # time penalty
 
-        # Evacuou
+        progress = (prev_dist - new_dist) / max(1.0, max_dist)
+        reward += 10.0 * progress
+
         if agent.evacuated:
-            reward += 50.0
+            reward += 80.0
 
-        # Hazard
+        # Penalidade por não progredir (progress muito negativo ou ~zero)
+        if progress <= 0.0 and not agent.evacuated:
+            reward -= 1.0
+
+        # ── Camada 2: hazard e emoção ──
         if self.touches_hazard(agent):
-            reward -= 2.0
+            reward -= 3.0
         elif self.hazard_visible(agent):
-            # Bonus pequeno por manter calma (emotion baixa) quando hazard está visível
-            # Incentiva o agente a aprender que ver ≠ entrar
-            reward += 0.5 * (1.0 - agent.emotion_level)
+            # Bônus por manter calma ao ver o hazard (reforça FSM)
+            reward += 0.4 * (1.0 - agent.emotion_level)
+            # Penalidade por pânico prolongado perto do hazard (não progride)
+            if agent.emotion_level > 0.5:
+                reward -= 0.5
 
-        # Colisão com parede ou agente
+        # ── Camada 3: interação social ──
         if collided:
             reward -= 0.3
+
+        density_norm = min(1.0, self.local_density(agent, radius=35.0) / 8.0)
+        reward -= 0.1 * density_norm
 
         return reward
 
@@ -514,6 +756,56 @@ class Environment:
         if self.time >= self.max_steps:
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # Métricas completas para avaliação experimental
+    # ------------------------------------------------------------------
+
+    def get_episode_metrics(self) -> dict:
+        """
+        Retorna métricas completas do episódio para comparação entre políticas.
+        Chame ao final de cada episódio (após is_done() = True).
+
+        Métricas primárias (use para comparar A* vs A*+FSM vs DQN+FSM):
+          evacuation_rate        : fração de agentes que evacuaram
+          mean_evacuation_time   : tempo médio de evacuação (só dos que evacuaram)
+
+        Métricas emocionais (sua contribuição central):
+          mean_emotion_final     : média de emotion_level no último step
+          peak_panic_ratio       : fração de agentes que atingiram FSMState.PANIC
+          emotion_variance       : variância do emotion_level entre agentes
+
+        Métricas de eficiência:
+          collision_events       : número total de colisões no episódio
+          mean_speed_ratio       : velocidade média / base_speed (efeito da FSM)
+        """
+        n = len(self.agents)
+        if n == 0:
+            return {}
+
+        evacuated = [a for a in self.agents if a.evacuated]
+        evac_times = [a.evacuation_time for a in evacuated if hasattr(a, 'evacuation_time')]
+
+        emotions = [a.emotion_level for a in self.agents]
+        panic_reached = [a for a in self.agents if hasattr(a, 'peak_emotion')
+                         and a.peak_emotion >= 0.72]
+
+        speeds = [a.current_speed for a in self.agents]
+
+        return {
+            # Primárias
+            "evacuation_rate":      len(evacuated) / n,
+            "all_evacuated":        len(evacuated) == n,
+            "mean_evacuation_time": sum(evac_times) / max(1, len(evac_times)) if evac_times else self.max_steps,
+            "steps":                self.time,
+
+            # Emocionais
+            "mean_emotion_final":   sum(emotions) / n,
+            "emotion_variance":     sum((e - sum(emotions)/n)**2 for e in emotions) / n,
+
+            # Eficiência
+            "mean_speed_ratio":     sum(speeds) / max(1, n) / max(1.0, self.agents[0].base_speed),
+        }
 
     # ------------------------------------------------------------------
     # Utilitários

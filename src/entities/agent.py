@@ -22,10 +22,12 @@ class Agent:
         self.direction = Direction.N
         self.state = FSMState.CALM
         self.emotion_level = 0.0
+        self.peak_emotion = 0.0  # máximo emotion_level atingido no episódio
 
         # Status
         self.evacuated = False
         self.alive = True
+        self.evacuation_time = None  # step em que evacuou (None se não evacuou)
 
         # Avoidance de obstáculos
         self.obstacle_avoidance_distance = 14.0
@@ -45,3 +47,8 @@ class Agent:
     def stop(self):
         self.vx = 0.0
         self.vy = 0.0
+
+    def update_peak_emotion(self):
+        """Atualiza o pico emocional — chame após update_emotion no environment."""
+        if self.emotion_level > self.peak_emotion:
+            self.peak_emotion = self.emotion_level
