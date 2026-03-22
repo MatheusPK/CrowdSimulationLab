@@ -186,24 +186,81 @@ DQN_TARGET_UPDATE_FREQ  = 300     # updates de gradient entre cada sync da targe
                                    # Valores menores → target muda mais rápido (instável)
                                    # Valores maiores → target muda mais devagar (conservador)
 
-# Epsilon-greedy (exploração)
-DQN_EPSILON_START       = 1.0     # exploração inicial (100% aleatório)
+# Epsilon-greedy — decay LINEAR calibrado por fase do currículo
+#
+# Estratégia:
+#     eps = eps_start + (steps_done / stage_decay) * (eps_end - eps_start)
+#
+# steps_done é RESETADO a 0 no início de cada stage (train_curriculum.py),
+# e stage_decay vem de STAGE_EPSILON_DECAY[stage_idx].
+#
+# Isso garante que cada stage começa com exploração alta (eps_start) e decai
+# até eps_end ao longo das transições esperadas para aquele stage — em vez de
+# usar um único decay global que chegaria a eps=0.05 somente no ep ~2051 para
+# stages com N=4 (780 trans/ep), causando catastrophic forgetting observado
+# no stage 1 (colapso ep 450→500 com eps=0.67).
+#
+# Por que linear em vez de exponencial (Zhang et al. 2021):
+#   O exponencial concentra exploração nos primeiros episódios e chega ao mínimo
+#   mais rápido — vantagem em ambientes estacionários. No currículo, cada stage
+#   é um ambiente novo; o agente precisa de exploração sustentada durante toda a
+#   fase de aprendizado do stage, não apenas no início. O linear distribui a
+#   exploração proporcionalmente, mantendo eps > 0.15 nos stages de dilema de
+#   rota (6, 9, 11) onde a rota alternativa precisa ser descoberta por tentativa.
+DQN_EPSILON_START       = 1.0     # exploração inicial por stage (100% aleatório)
 DQN_EPSILON_END         = 0.05    # exploração mínima (5% aleatório)
-DQN_EPSILON_DECAY       = 1_600_000 # steps (transições) para decair de start até end
-                                     #
-                                     # Calibrado para currículo de 12 stages com N=4→12 agentes:
-                                     #   Trans/ep (N=12, 450 steps): ~3510
-                                     #   Stages 1-4  (N=4,  300 steps):  ~780 trans/ep × 150ep ≈  468k
-                                     #   Stages 5-8  (N=10, 400 steps): ~2600 trans/ep × 150ep ≈ 1560k
-                                     #   Epsilon = 0.05 atingido ~no stage 10 (mall_medium)
-                                     #
-                                     # Isso garante ε≈0.15 no stage 9 (hazard_bypass_medium),
-                                     # onde o dilema de rota com 12 agentes precisa de exploração
-                                     # para descobrir a rota alternativa ao hazard.
-                                     # Com valor antigo (200k), epsilon virava 0.05 no stage 2.
+DQN_EPSILON_DECAY       = 1_600_000  # fallback global — usado se o stage não estiver
+                                     # coberto por STAGE_EPSILON_DECAY
+
+# Decay local por stage (índice 0-based, stage 1 = índice 0).
+#
+# Calculado como: N_agentes × avg_steps_por_ep × ep_mediana_promoção
+#   avg_steps = max_steps × 0.65  (fração média de steps antes da evacuação)
+#
+# Alvo: eps chega a 0.05 aproximadamente no ep mediano de promoção.
+# stages de dilema (6, 9, 11) usam valores maiores para manter exploração
+# suficiente para descobrir rotas alternativas ao hazard.
+STAGE_EPSILON_DECAY = [
+     70_000,   # stage 1  mall_small            N=4,  ~780 t/ep,  ep_med ~90
+     70_000,   # stage 2  school_small           N=4,  ~780 t/ep,  ep_med ~90
+     78_000,   # stage 3  office_wing_small      N=4,  ~780 t/ep,  ep_med ~100
+     94_000,   # stage 4  library_small          N=4,  ~780 t/ep,  ep_med ~120
+    234_000,   # stage 5  library_medium         N=6,  ~1560 t/ep, ep_med ~150
+    164_000,   # stage 6  hazard_corridor_small  N=4,  ~910 t/ep,  ep_med ~180
+    624_000,   # stage 7  school_floor           N=8,  ~2080 t/ep, ep_med ~300 ← corrigido
+    780_000,   # stage 8  office_wing_medium     N=10, ~2600 t/ep, ep_med ~300 ← corrigido
+  1_228_500,   # stage 9  hazard_bypass_medium   N=12, ~3510 t/ep, ep_med ~350 ← dilema crítico
+  1_053_000,   # stage 10 mall_medium            N=12, ~3510 t/ep, ep_med ~300 ← corrigido
+  1_228_500,   # stage 11 hazard_dense_office    N=12, ~3510 t/ep, ep_med ~350 ← dilema
+  1_053_000,   # stage 12 library_hard           N=12, ~3510 t/ep, ep_med ~300 ← corrigido
+]
 
 # Gradient clipping (estabiliza treino com reward shaping)
 DQN_GRAD_CLIP_NORM      = 10.0    # max_norm para clip_grad_norm_
+
+# Prioritized Experience Replay (PER) — Schaul et al. 2015
+#
+# PER resolve o problema de sinal esparso identificado nos logs de treino:
+# transições de evacuação bem-sucedida (+80) eram minoria no buffer de 100k
+# e raramente apareciam nos batches de 64. Com PER, transições com TD-error
+# alto (evacuações, primeiros contatos com hazard) são amostradas com muito
+# mais frequência — exatamente o que o agente mais precisa aprender.
+#
+# PER_ALPHA:       grau de priorização [0=uniforme, 1=totalmente prioritizado]
+#                  0.6 é o valor padrão da literatura (Schaul et al. 2015)
+#                  Reduzir → mais uniforme; aumentar → mais agressivo
+PER_ALPHA            = 0.6
+
+# PER_BETA_START:  correção de importância inicial (IS weights)
+#                  IS weights corrigem o viés introduzido pela amostragem
+#                  não-uniforme. Beta cresce linearmente de START até 1.0.
+#                  0.4 é o valor padrão da literatura.
+PER_BETA_START       = 0.4
+
+# PER_BETA_FRAMES: transições para beta chegar a 1.0
+#                  Calibrado para o currículo completo (~3M transições).
+#                  Beta=1.0 ao final garante correção total do viés.
+PER_BETA_FRAMES      = 3_000_000
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -234,18 +291,11 @@ REWARD_PROGRESS_SCALE   = 15.0    # peso do progresso BFS em direção à saída
                                    # ser mais forte para superar o time_penalty de -0.05/step
 REWARD_EVACUATED        = 80.0    # recompensa terminal por evacuação bem-sucedida
 REWARD_TIME_PENALTY     = -0.05   # por step (urgência suave, não paralisa)
-REWARD_NO_PROGRESS      = -1.0    # se progress < -1e-4 (retrocesso real) e não evacuou
-                                   # NÃO é aplicado em estagnação (progress == 0):
-                                   # com VELOCITY_SMOOTHING=0.18 o agente leva ~4 steps
-                                   # para mudar de célula BFS — penalizar estagnação
-                                   # mascarava o sinal de progresso em ~94% dos steps.
+REWARD_NO_PROGRESS      = -1.0    # se progress <= 0 e não evacuou
 
 # Camada 2 — hazard e emoção
 REWARD_HAZARD_CONTACT   = -3.0    # por step dentro do hazard (forte e contínuo)
 REWARD_HAZARD_VISIBLE_CALM = 0.4  # bônus × (1 - emotion) ao ver hazard sem entrar
-                                   # ATENÇÃO: incentiva calma perto do hazard, não
-                                   # aproximação. Monitorar hazard_contact_rate nos
-                                   # stages 4-5; se subir, reduzir para 0.2 ou zerar.
 REWARD_HAZARD_PANIC     = -0.5    # penalidade por emotion > 0.5 perto do hazard
 
 # Camada 3 — interação social
@@ -259,5 +309,8 @@ REWARD_DENSITY_SCALE    = -0.1    # × densidade_norm (penaliza aglomeração ex
 
 CURRICULUM_PROMOTION_THRESHOLD = 0.80   # evacuation_rate média mínima para promover
 CURRICULUM_EVAL_WINDOW         = 30     # episódios na janela de avaliação
-CURRICULUM_PATIENCE            = 500    # episódios máximos por stage
+CURRICULUM_PATIENCE            = 500    # máx de episódios por stage antes de avançar mesmo sem promoção
+                                         # aumentado de 300 → 500: ambiente mais complexo que literatura
+                                         # (FSM + contágio + hazard + multi-exit juntos) precisa de mais
+                                         # experiência. Xu et al. 2021 usaram ~30k ep num ambiente simples.
 CURRICULUM_SAVE_EVERY          = 50     # salva checkpoint a cada N episódios

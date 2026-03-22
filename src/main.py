@@ -1,13 +1,20 @@
 """
-main.py — entrypoint para rodar um cenário único.
+main.py — entrypoint para rodar e avaliar qualquer política.
 
 Uso:
-    python main.py                  # usa config.py como está
-    python main.py --no-render      # sem janela (mais rápido)
-    python main.py --episodes 20    # sobrescreve eval_episodes
+    python main.py                        # usa config.py como está
+    python main.py --no-render            # sem janela (mais rápido)
+    python main.py --episodes 30          # número de episódios
+    python main.py --log                  # salva resultados em logs/results.csv
+    python main.py --no-render --episodes 30 --log  # combinando flags
 
-Para treino DQN com currículo:
-    python train_curriculum.py
+Para treino DQN com currículo progressivo:
+    python train_curriculum.py            # treino completo
+    python train_curriculum.py --stage 6  # começa no stage 6
+    python train_curriculum.py --eval     # avalia nos 5 mapas eval
+
+NOTA: main.py é exclusivamente para execução e avaliação de políticas
+já treinadas. Nunca use main.py com DQN mode=TRAIN — use train_curriculum.py.
 """
 
 import argparse
@@ -45,7 +52,6 @@ def build_renderer(map_data, title: str) -> Renderer | None:
 
 def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
     """Roda um episódio completo e retorna as métricas."""
-    # FIX: captura obs ANTES do primeiro step para ter prev_obs correto
     obs_list = env.reset()
     prev_obs = {id(a): obs_list[i] for i, a in enumerate(env.agents)}
 
@@ -64,45 +70,13 @@ def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
             for agent in env.agents
         ]
 
-        # FIX: env.step() retorna next_obs como primeiro elemento
         next_obs_list, reward_list, done, _ = env.step(actions)
-
-        # update_peak_emotion já chamado dentro de environment.step()
-        if cfg.SCENARIO == AppScenario.DQN_FSM:
-            # FIX: passa prev_obs e next_obs corretamente
-            _store_transitions(env, policy, actions, reward_list, done,
-                               prev_obs, next_obs_list)
-
-        # FIX: atualiza prev_obs com o estado pós-step
         prev_obs = {id(a): next_obs_list[i] for i, a in enumerate(env.agents)}
 
         if renderer is not None:
             renderer.render(env)
 
     return env.get_episode_metrics()
-
-
-def _store_transitions(env, policy, actions, reward_list, done,
-                       prev_obs: dict, next_obs_list: list):
-    """
-    Armazena transições no replay buffer do DQN (só em mode=TRAIN).
-
-    FIX: antes, obs e next_obs apontavam para a mesma lista (estado pós-step),
-    corrompendo o target Q-value. Agora recebe prev_obs (estado pré-step)
-    e next_obs_list (estado pós-step) separados.
-    """
-    if not hasattr(policy, "store_transition"):
-        return
-    for i, agent in enumerate(env.agents):
-        if actions[i] is None:
-            continue
-        policy.store_transition(
-            obs=prev_obs[id(agent)],
-            action=actions[i],
-            reward=reward_list[i],
-            next_obs=next_obs_list[i],
-            done=done,
-        )
 
 
 # ── Logging de resultados ─────────────────────────────────────────────────────
@@ -185,9 +159,13 @@ def main():
     if args.no_render:
         cfg.RENDER = False
 
+    # Guarda contra uso acidental de main.py para treino DQN
+    if cfg.SCENARIO == AppScenario.DQN_FSM and cfg.DQN.get("mode") == DQNMode.TRAIN:
+        print("ERRO: main.py não deve ser usado para treino DQN.")
+        print("Use: python train_curriculum.py")
+        return
+
     episodes = args.episodes or cfg.EVAL_EPISODES
-    if cfg.SCENARIO == AppScenario.DQN_FSM and cfg.DQN["mode"] == DQNMode.TRAIN:
-        episodes = cfg.DQN["episodes"]
 
     if args.log:
         init_log()
@@ -221,17 +199,8 @@ def main():
         if args.log:
             log_result(ep, metrics)
 
-        if (cfg.SCENARIO == AppScenario.DQN_FSM
-                and cfg.DQN["mode"] == DQNMode.TRAIN
-                and ep % 50 == 0):
-            policy.save()
-            print(f"  [DQN] modelo salvo — ep {ep}")
-
     if renderer is not None:
         renderer.close()
-
-    if cfg.SCENARIO == AppScenario.DQN_FSM and cfg.DQN["mode"] == DQNMode.TRAIN:
-        policy.save()
 
     print_summary(all_results)
 

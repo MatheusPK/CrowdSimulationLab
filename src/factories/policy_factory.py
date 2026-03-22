@@ -9,6 +9,7 @@ from environment.environment import Environment
 from policies.astar_policy import AStarPolicy
 from policies.random_policy import RandomPolicy
 from policies.dqn_policy import DQNPolicy
+from simulation_params import PER_ALPHA, PER_BETA_START, PER_BETA_FRAMES
 
 
 class PolicyFactory:
@@ -39,6 +40,9 @@ class PolicyFactory:
                 epsilon_start=d["epsilon_start"],
                 epsilon_end=d["epsilon_end"],
                 epsilon_decay=d["epsilon_decay"],
+                per_alpha=PER_ALPHA,
+                per_beta_start=PER_BETA_START,
+                per_beta_frames=PER_BETA_FRAMES,
             )
 
         raise ValueError(f"Cenário desconhecido: {scenario}")

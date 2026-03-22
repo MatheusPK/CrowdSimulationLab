@@ -53,7 +53,8 @@ from rendering.renderer import Renderer
 from simulation_params import (
     DQN_HIDDEN_DIM, DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR,
     DQN_BUFFER_CAPACITY, DQN_TARGET_UPDATE_FREQ, DQN_TRAIN_START_SIZE,
-    DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY,
+    DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY, STAGE_EPSILON_DECAY,
+    PER_ALPHA, PER_BETA_START, PER_BETA_FRAMES,
     CURRICULUM_PROMOTION_THRESHOLD, CURRICULUM_EVAL_WINDOW,
     CURRICULUM_PATIENCE, CURRICULUM_SAVE_EVERY,
 )
@@ -63,11 +64,21 @@ from simulation_params import (
 CURRICULUM = [
     # (nome, caminho, n_agents, max_steps)
     #
-    # Progressão de agentes:
-    #   Stages 1-4  (small):   4 agentes  — mapas pequenos, 12-14 spawns disponíveis
-    #   Stages 5,7-8 (médio):  10 agentes — introduz dinâmica coletiva (Xu 2021: mín 10)
-    #   Stage 6     (small):   4 agentes  — mapa small, mantém 4
-    #   Stages 9-12 (médio):   12 agentes — contágio emocional consistente (Lv 2022: mín 12)
+    # Progressão de N — v3 (corrigida após análise do colapso no stage 5):
+    #
+    # O colapso ocorreu porque o currículo original introduzia 3 variáveis
+    # simultaneamente no stage 5 (N=4→10, mapa small→medium, hazard leve→médio).
+    # Com 10 agentes, o contágio emocional entra em loop de pânico coletivo que
+    # o modelo nunca viu com N=4. O stage 6 também falhou porque o modelo que
+    # saiu do stage 5 danificado não conseguia evacuar nem com N=4.
+    #
+    # Correção: progressão gradual de N — máximo 1 variável relevante por stage.
+    #   Stages 1-4  (N=4):  navegação e FSM básica
+    #   Stage  5    (N=6):  primeiro contato com dinâmica coletiva  ← era N=10
+    #   Stage  6    (N=4):  dilema de rota (foco no hazard, não no N)
+    #   Stage  7    (N=8):  escala coletiva gradual                 ← era N=10
+    #   Stage  8    (N=10): N=10 com base sólida de 8 agentes
+    #   Stages 9-12 (N=12): contágio emocional consistente (Lv 2022: mín 12)
     #
     # Stages 1-3: navegação pura (sem hazard)
     ("mall_small",            "maps/train/mall_small.txt",             4,  300),
@@ -75,20 +86,22 @@ CURRICULUM = [
     ("office_wing_small",     "maps/train/office_wing_small.txt",      4,  300),
     # Stage 4: primeiro hazard leve
     ("library_small",         "maps/train/library_small.txt",          4,  300),
-    # Stage 5: hazard médio, multi-exit — primeiro grupo de 10 agentes
-    ("library_medium",        "maps/train/library_medium.txt",        10,  400),
-    # Stage 6: ★ dilema rota-perigosa/rota-segura — mapa small, volta para 4
+    # Stage 5: mapa medium + hazard leve — N=6 (não 10) para introduzir
+    #          dinâmica coletiva gradualmente antes do contágio emocional escalar
+    ("library_medium",        "maps/train/library_medium.txt",         6,  400),
+    # Stage 6: ★ dilema rota-perigosa/rota-segura — N=4, foco no hazard
     ("hazard_corridor_small", "maps/train/hazard_corridor_small.txt",  4,  350),
-    # Stages 7-8: hazard em layouts densos, 10 agentes
-    ("school_floor",          "maps/train/school_floor.txt",          10,  400),
+    # Stage 7: N=8 — sobe N de forma controlada antes do 10
+    ("school_floor",          "maps/train/school_floor.txt",           8,  400),
+    # Stage 8: N=10 — agora com base sólida de dinâmica coletiva
     ("office_wing_medium",    "maps/train/office_wing_medium.txt",    10,  400),
-    # Stage 9: ★ dilema de rota em escala média — sobe para 12 agentes
+    # Stage 9: ★ dilema de rota em escala média — sobe para N=12
     ("hazard_bypass_medium",  "maps/train/hazard_bypass_medium.txt",  12,  450),
-    # Stage 10: shopping anel, hazard distribuído, 12 agentes
+    # Stage 10: shopping anel, hazard distribuído, N=12
     ("mall_medium",           "maps/train/mall_medium.txt",           12,  450),
-    # Stage 11: ★ alta densidade de hazard — 12 agentes, contágio emocional ativo
+    # Stage 11: ★ alta densidade de hazard — N=12, contágio emocional ativo
     ("hazard_dense_office",   "maps/train/hazard_dense_office.txt",   12,  450),
-    # Stage 12: gargalo + hazard — 12 agentes (prep para library_bottleneck eval)
+    # Stage 12: gargalo + hazard — N=12 (prep para library_bottleneck eval)
     ("library_hard",          "maps/train/library_hard.txt",          12,  450),
 ]
 
@@ -122,6 +135,7 @@ DQN_CFG = dict(
     buffer_capacity=DQN_BUFFER_CAPACITY, target_update_freq=DQN_TARGET_UPDATE_FREQ,
     train_start_size=DQN_TRAIN_START_SIZE, epsilon_start=DQN_EPSILON_START,
     epsilon_end=DQN_EPSILON_END, epsilon_decay=DQN_EPSILON_DECAY,
+    per_alpha=PER_ALPHA, per_beta_start=PER_BETA_START, per_beta_frames=PER_BETA_FRAMES,
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -164,11 +178,12 @@ def build_policy(env, model_path, mode):
     return DQNPolicy(mode=mode, model_path=model_path,
                      state_dim=env.OBS_DIM, action_dim=8, **DQN_CFG)
 
-def build_renderer(env, title, fps=30):
+def build_renderer(env, title, fps=30, enabled=True):
     r = Renderer(width=env.map_data.width, height=env.map_data.height,
                  title=title, fps=fps, draw_grid=True,
                  tile_size=env.map_data.tile_size)
     r.initialize()
+    r.enabled = enabled  # preserva estado de pausa manual entre stages
     return r
 
 # ── Loop de episódio ──────────────────────────────────────────────────────────
@@ -225,11 +240,27 @@ def run_episode(env, policy, renderer=None, train=True):
 # ── Treino de um stage ────────────────────────────────────────────────────────
 
 def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
-                stage_label=None):
+                stage_label=None, prev_renderer=None):
     name, map_path, n_agents, max_steps = CURRICULUM[stage_idx]
     label = stage_label or f"Stage {stage_idx+1}"
     env = build_env(map_path, n_agents, max_steps)
-    renderer = build_renderer(env, f"{label}: {name}") if render else None
+
+    # Preserva o estado de pausa (enabled) do renderer do stage anterior.
+    # Sem isso, pressionar espaço para pausar a janela durante o treino não
+    # persiste entre stages — o novo renderer sempre inicializa com enabled=True.
+    render_enabled = prev_renderer.enabled if prev_renderer is not None else True
+    renderer = build_renderer(env, f"{label}: {name}", enabled=render_enabled) if render else None
+
+    # ── Reset de exploração para este stage ──────────────────────────────────
+    # Cada stage começa com epsilon=1.0 e decai linearmente até 0.05 ao longo
+    # de STAGE_EPSILON_DECAY[stage_idx] transições — calibrado para que eps
+    # chegue a ~0.05 no episódio mediano de promoção deste stage.
+    stage_decay = (
+        STAGE_EPSILON_DECAY[stage_idx]
+        if stage_idx < len(STAGE_EPSILON_DECAY)
+        else DQN_EPSILON_DECAY
+    )
+    policy.reset_for_stage(stage_decay=stage_decay, epsilon_start=1.0)
 
     recent = deque(maxlen=EVAL_WINDOW)
     ep_global = ep_global_start
@@ -245,6 +276,7 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
         print(f"  {map_path}")
         print(f"  agents={n_agents}  max_steps={max_steps}  "
               f"[multi-agent parameter sharing]")
+        print(f"  epsilon_decay={stage_decay:,}  (steps_done resetado para 0)")
         if is_new:
             descriptions = {
                 "hazard_corridor_small": "dilema rota-perigosa vs rota-segura",
@@ -304,7 +336,7 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
     if verbose and not promoted:
         print(f"\n  → Patience esgotada ({PATIENCE} ep). Avançando.")
 
-    return ep_global, promoted
+    return ep_global, promoted, renderer
 
 # ── Fine-tuning (di_style) ────────────────────────────────────────────────────
 
@@ -448,11 +480,13 @@ def main():
 
     # Treino principal
     if not args.fine_tune:
+        prev_renderer = None
         for stage_idx in range(start, len(CURRICULUM)):
-            ep_global, _ = train_stage(
+            ep_global, _, prev_renderer = train_stage(
                 stage_idx, policy, ep_global,
                 render=args.render,
                 verbose=not args.quiet,
+                prev_renderer=prev_renderer,
             )
 
     # Fine-tuning em di_style (opcional, após treino principal ou standalone)
