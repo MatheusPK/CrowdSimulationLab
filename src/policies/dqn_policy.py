@@ -29,11 +29,6 @@ class DQNNetwork(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
-
-# ---------------------------------------------------------------------------
-# Prioritized Experience Replay (PER) — Schaul et al. 2015
-# ---------------------------------------------------------------------------
-
 class PrioritizedReplayBuffer:
     """
     Replay buffer com amostragem por prioridade.
@@ -81,7 +76,9 @@ class PrioritizedReplayBuffer:
     def push(self, state, action, reward, next_state, done):
         leaf     = self.ptr + self.capacity - 1
         self.data[self.ptr] = (state, action, reward, next_state, done)
-        priority = self._max_priority ** self.alpha
+        # _max_priority is already alpha-scaled (stored as (td+eps)^alpha in
+        # update_priorities). Applying ** alpha again would double-scale.
+        priority = self._max_priority
         delta    = priority - self.tree[leaf]
         self.tree[leaf] = priority
         self._propagate(leaf, delta)
@@ -89,6 +86,11 @@ class PrioritizedReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int, beta: float = 0.4):
+        if self.total_priority <= 0 or self.size == 0:
+            raise RuntimeError(
+                "PER.sample() chamado com buffer vazio ou prioridade zero. "
+                "Verifique se len(buffer) >= train_start_size antes de amostrar."
+            )
         indices    = np.empty(batch_size, dtype=np.int32)
         is_weights = np.empty(batch_size, dtype=np.float32)
         segment    = self.total_priority / batch_size
@@ -114,6 +116,13 @@ class PrioritizedReplayBuffer:
             delta              = priority - self.tree[idx]
             self.tree[idx]     = priority
             self._propagate(idx, delta)
+
+    def reset(self):
+        self.tree          = np.zeros(2 * self.capacity - 1)
+        self.data          = np.empty(self.capacity, dtype=object)
+        self.size          = 0
+        self.ptr           = 0
+        self._max_priority = 1.0
 
     def __len__(self):
         return self.size
@@ -186,8 +195,9 @@ class DQNPolicy:
         self.optimizer  = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.buffer     = PrioritizedReplayBuffer(buffer_capacity, alpha=per_alpha)
 
-        self.steps_done   = 0
-        self.update_count = 0
+        self.steps_done          = 0
+        self.update_count        = 0
+        self._global_transitions = 0
 
         if os.path.exists(model_path):
             self._load(model_path)
@@ -220,6 +230,11 @@ class DQNPolicy:
             return
         self.buffer.push(obs, action, reward, next_obs, done)
         if len(self.buffer) >= self.train_start_size:
+            # _global_transitions controla o decaimento do beta do PER.
+            # Só incrementa quando o treino está de fato ativo, evitando
+            # que os primeiros train_start_size passos (warm-up) avancem
+            # o beta antes de qualquer gradient step acontecer.
+            self._global_transitions += 1
             self._transition_count += 1
             if self._transition_count % self.update_every == 0:
                 self.steps_done += 1
@@ -234,10 +249,11 @@ class DQNPolicy:
         return self._current_epsilon()
 
     def reset_for_stage(self, stage_decay: int, epsilon_start: float = 1.0):
-        self.steps_done       = 0
+        self.steps_done        = 0
         self._transition_count = 0
-        self.epsilon_decay    = stage_decay
-        self.epsilon_start    = epsilon_start
+        # _global_transitions nunca reseta — mantém beta decaindo globalmente
+        self.epsilon_decay  = stage_decay
+        self.epsilon_start  = epsilon_start
 
     # ------------------------------------------------------------------
     # Internos
@@ -253,7 +269,7 @@ class DQNPolicy:
         return self.epsilon_start + progress * (self.epsilon_end - self.epsilon_start)
 
     def _current_beta(self) -> float:
-        progress = min(1.0, self.steps_done / max(1, self.per_beta_frames))
+        progress = min(1.0, self._global_transitions / max(1, self.per_beta_frames))
         return self.per_beta_start + progress * (1.0 - self.per_beta_start)
 
     def _update(self):
@@ -271,14 +287,18 @@ class DQNPolicy:
         q_values = self.policy_net(states_t).gather(1, actions_t).squeeze(1)
 
         with torch.no_grad():
-            next_q = self.target_net(next_states_t).max(dim=1).values
-            target = rewards_t + self.gamma * next_q * (1.0 - dones_t)
+            next_actions = self.policy_net(next_states_t).argmax(dim=1, keepdim=True)
+            next_q       = self.target_net(next_states_t).gather(1, next_actions).squeeze(1)
+
+            agent_evacuated = next_states_t[:, 16]
+            effective_done  = torch.clamp(dones_t + agent_evacuated, 0.0, 1.0)
+            target = rewards_t + self.gamma * next_q * (1.0 - effective_done)
 
         td_errors = (target - q_values).detach().cpu().numpy()
         self.buffer.update_priorities(indices, td_errors)
 
         loss = (weights_t * nn.functional.smooth_l1_loss(
-            q_values, target, reduction="none"
+            q_values, target, reduction="none", beta=10.0
         )).mean()
 
         self.optimizer.zero_grad()
@@ -291,6 +311,6 @@ class DQNPolicy:
             self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def _load(self, path: str):
-        state_dict = torch.load(path, map_location=self.device)
+        state_dict = torch.load(path, map_location=self.device, weights_only=True)
         self.policy_net.load_state_dict(state_dict)
         self.target_net.load_state_dict(state_dict)

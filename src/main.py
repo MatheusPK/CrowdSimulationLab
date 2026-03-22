@@ -53,7 +53,6 @@ def build_renderer(map_data, title: str) -> Renderer | None:
 def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
     """Roda um episódio completo e retorna as métricas."""
     obs_list = env.reset()
-    prev_obs = {id(a): obs_list[i] for i, a in enumerate(env.agents)}
 
     done    = False
     running = True
@@ -71,7 +70,6 @@ def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
         ]
 
         next_obs_list, reward_list, done, _ = env.step(actions)
-        prev_obs = {id(a): next_obs_list[i] for i, a in enumerate(env.agents)}
 
         if renderer is not None:
             renderer.render(env)
@@ -150,6 +148,8 @@ def parse_args():
     p.add_argument("--no-render",  action="store_true", help="Desativa renderização")
     p.add_argument("--episodes",   type=int, default=None)
     p.add_argument("--log",        action="store_true", help="Salva resultados em CSV")
+    p.add_argument("--seed",       type=int, default=None,
+                   help="Seed para reproducibilidade (spawns e aleatóriedade)")
     return p.parse_args()
 
 
@@ -182,6 +182,12 @@ def main():
     policy = PolicyFactory.build(env)
 
     renderer = build_renderer(map_data, title=f"{cfg.SCENARIO.value} | {os.path.basename(cfg.MAP)}")
+
+    if args.seed is not None:
+        import random as _random
+        _random.seed(args.seed)
+        import numpy as _np
+        _np.random.seed(args.seed)
 
     all_results = []
     for ep in range(1, episodes + 1):

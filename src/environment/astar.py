@@ -1,6 +1,8 @@
 import heapq
 import math
 
+from simulation_params import AGENT_RADIUS as _AGENT_PHYSICAL_RADIUS
+
 
 class AStarPlanner:
     def __init__(self, map_data, agent_radius, hazard_cost=8.0):
@@ -89,6 +91,18 @@ class AStarPlanner:
         return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
 
     def get_neighbors(self, row, col):
+        """
+        Retorna vizinhos navegáveis de (row, col) com seus custos de movimento.
+
+        Duas garantias de consistência física:
+          1. Clearance: cada vizinho é verificado via has_clearance (baseado no
+             agent_radius do planner, incluindo margem de segurança).
+          2. Anti corner-cutting diagonal: um movimento diagonal (dr≠0, dc≠0)
+             só é permitido se ambas as células ortogonais intermediárias
+             (row+dr, col) e (row, col+dc) também tiverem clearance.
+             Isso impede que o agente "corte" a quina entre dois obstáculos
+             adjacentes — fisicamente impossível para um agente com raio > 0.
+        """
         directions = [
             (-1,  0, 1.0),
             (-1,  1, math.sqrt(2)),
@@ -155,9 +169,9 @@ class AStarPlanner:
                             exit_obj.y <= cy <= exit_obj.y + exit_obj.height):
                         exit_cells.append((r, c))
 
-        # Para cada célula E, procura em espiral a célula com clearance
-        # mais próxima que realmente alcança o tile (agent_radius físico = 6px)
-        AGENT_PHYSICAL_RADIUS = 6.0
+        # Raio físico do agente — importado de simulation_params para manter consistência.
+        # Se AGENT_RADIUS mudar, get_exit_approach_cell acompanha automaticamente.
+        AGENT_PHYSICAL_RADIUS = _AGENT_PHYSICAL_RADIUS
         best_cell = None
         best_dist = float("inf")
 

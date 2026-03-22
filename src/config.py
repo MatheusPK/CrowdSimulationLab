@@ -1,17 +1,13 @@
 """
-config.py — ponto único de configuração da simulação.
+config.py — configuração da simulação para main.py.
 
-Para rodar um experimento, edite as três linhas marcadas com  <--
-e execute:  python main.py
+Edite as três linhas marcadas com <-- e execute: python main.py
 
 Cenários disponíveis:
     AppScenario.RANDOM      baseline aleatório, sem FSM
     AppScenario.ASTAR       A* puro,            sem FSM
     AppScenario.ASTAR_FSM   A* com emoção,      com FSM
     AppScenario.DQN_FSM     DQN com emoção,     com FSM
-
-Para treino DQN com currículo progressivo:
-    python train_curriculum.py
 """
 
 from core.app_scenario import AppScenario
@@ -23,31 +19,31 @@ from simulation_params import (
     DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY,
 )
 
-# ── Mapas de treino (usados pelo currículo em train_curriculum.py) ────────────
+# ── Mapas de treino ───────────────────────────────────────────────────────────
 
 TRAIN_MAPS = {
-    # Pequenos — 26×56, sem hazard (navegação pura)
-    "library_small":      "maps/train/library_small.txt",
-    "office_wing_small":  "maps/train/office_wing_small.txt",
-    "mall_small":         "maps/train/mall_small.txt",
-    "school_small":       "maps/train/school_small.txt",
-
-    # Médios — 36×80, hazard leve (introdução da FSM)
-    "library_medium":     "maps/train/library_medium.txt",
-    "school_floor":       "maps/train/school_floor.txt",
-    "office_wing_medium": "maps/train/office_wing_medium.txt",
-
-    # Médios — 36×80, hazard e layout mais complexo (currículo v2)
-    "mall_medium":            "maps/train/mall_medium.txt",
-    "library_hard":           "maps/train/library_hard.txt",
-    "di_style":               "maps/train/di_style.txt",
-    # Novos mapas v2 — dilema de rota e alta densidade de hazard
-    "hazard_corridor_small":  "maps/train/hazard_corridor_small.txt",
-    "hazard_bypass_medium":   "maps/train/hazard_bypass_medium.txt",
-    "hazard_dense_office":    "maps/train/hazard_dense_office.txt",
+    "mall_small":              "maps/train/mall_small.txt",
+    "school_small":            "maps/train/school_small.txt",
+    "office_wing_small":       "maps/train/office_wing_small.txt",
+    "library_small":           "maps/train/library_small.txt",
+    "library_medium":          "maps/train/library_medium.txt",
+    "hazard_corridor_small":   "maps/train/hazard_corridor_small.txt",
+    "hazard_near_exit_small":  "maps/train/hazard_near_exit_small.txt",
+    "school_floor":            "maps/train/school_floor.txt",
+    "office_wing_medium":      "maps/train/office_wing_medium.txt",
+    "hazard_near_exit_medium": "maps/train/hazard_near_exit_medium.txt",
+    "bridge_open_medium":      "maps/train/bridge_open_medium.txt",
+    "bridge_corridor_medium":  "maps/train/bridge_corridor_medium.txt",
+    "bridge_hazard_intro":     "maps/train/bridge_hazard_intro.txt",
+    "bridge_multi_exit":       "maps/train/bridge_multi_exit.txt",
+    "hazard_bypass_medium":    "maps/train/hazard_bypass_medium.txt",
+    "mall_medium":             "maps/train/mall_medium.txt",
+    "hazard_dense_office":     "maps/train/hazard_dense_office.txt",
+    "library_hard":            "maps/train/library_hard.txt",
+    "di_style":                "maps/train/di_style.txt",
 }
 
-# ── Mapas de avaliação (cenários do mestrado) ─────────────────────────────────
+# ── Mapas de avaliação ────────────────────────────────────────────────────────
 
 EVAL_MAPS = {
     "library_bottleneck": "maps/eval/library_bottleneck.txt",
@@ -57,32 +53,29 @@ EVAL_MAPS = {
     "di_emergency":       "maps/eval/di_emergency.txt",
 }
 
-# ── Todos os mapas (treino + eval + real) — para testes rápidos no main.py ────
-
 ALL_MAPS = {
     **TRAIN_MAPS,
     **EVAL_MAPS,
     "di_primeiro_andar": "maps/DI_primeiro_andar.txt",
 }
 
-SCENARIO = AppScenario.ASTAR          # <-- cenário
-MAP      = list(ALL_MAPS.values())[18]       # <-- mapa
-AGENTS   = 20                             # <-- número de agentes
+# ── Configuração do experimento ───────────────────────────────────────────────
 
-# ── Parâmetros gerais ─────────────────────────────────────────────────────────
+SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
+MAP      = EVAL_MAPS["library_bottleneck"]         # <-- mapa
+AGENTS   = 12                              # <-- número de agentes
 
 RENDER        = True
 FPS           = 30
 DT            = 0.1
-MAX_STEPS     = 400
+MAX_STEPS     = 450
 EVAL_EPISODES = 10
-ASTAR_HAZARD_COST = ASTAR_HAZARD_COST  # importado de simulation_params
 
-# ── Parâmetros DQN ────────────────────────────────────────────────────────────
+# ── DQN ──────────────────────────────────────────────────────────────────────
 
 DQN = {
     "mode":               DQNMode.EVAL,
-    "model_path":         "model_candidate_1_goodUntil8thStage/ckpt_s12_ep3475.pth",
+    "model_path":         "models/dqn_fsm.pth",
     "episodes":           500,
     "hidden_dim":         DQN_HIDDEN_DIM,
     "batch_size":         DQN_BATCH_SIZE,

@@ -42,6 +42,10 @@ class Agent:
         self.touched_hazard  = False   # True se tocou H em algum momento do episódio
         self.exit_used       = None    # Exit object usado para evacuar
 
+        # Contador de steps consecutivos sem progresso BFS (usado em compute_reward)
+        # Declarado aqui para evitar AttributeError se step() for chamado sem reset()
+        self.stagnation_steps = 0
+
         # Avoidance base (sobrescrito pelo update_fsm quando use_fsm=True)
         self.obstacle_avoidance_distance = OBSTACLE_AVOIDANCE_DISTANCE
         self.obstacle_avoidance_strength = OBSTACLE_AVOIDANCE_STRENGTH

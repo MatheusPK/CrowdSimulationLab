@@ -1,6 +1,6 @@
-OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOEEEEEEEEEEOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
-O.................HHHHHHHHHHHHHHHH............HHHHHHHHHHHHHHHH.................O
-O.................HHHHHHHHHHHHHHHH............HHHHHHHHHHHHHHHH.................O
+OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOEEEEEEEEEEEEOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
+O.................HHHHHHHHHHHHHHHHEEEEEEEEEEEEHHHHHHHHHHHHHHHH.................O
+O.................HHHHHHHHHHHHHHHHEEEEEEEEEEEEHHHHHHHHHHHHHHHH.................O
 O....S............HHHHHHHHHHHHHHHH............HHHHHHHHHHHHHHHH.................O
 O...........S.....HHHHHHHHHHHHHHHH............HHHHHHHHHHHHHHHH..........S......O
 O.................HHHHHHHHHHHHHHHH............HHHHHHHHHHHHHHHH...S.............O
@@ -29,8 +29,8 @@ O..............................................................................O
 O..............................................................................O
 O....S..............S...................S...................S..............S...O
 O..............................................................................O
+O.......................................S......................................O
 O..............................................................................O
-O..............................................................................O
-O..............S........................S........................S.............O
-O..............................................................................O
+O..............S...................EEEEEEEEEE....................S.............O
+O..................................EEEEEEEEEE..................................O
 OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOEEEEEEEEEEOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO

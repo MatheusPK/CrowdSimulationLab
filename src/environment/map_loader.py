@@ -13,8 +13,7 @@ from entities.obstacle import Obstacle
 from entities.exit import Exit
 from entities.hazard import Hazard
 from core.map_data import MapData
-
-TILE_SIZE = 8  # pixels por tile
+from simulation_params import TILE_SIZE
 
 
 def load_map(file_path: str) -> MapData:
@@ -24,13 +23,11 @@ def load_map(file_path: str) -> MapData:
     with open(file_path, "r", encoding="utf-8") as f:
         lines = [line.rstrip("\n") for line in f]
 
-    map_data.rows = len(lines)
-    # cols = largura da linha mais longa (robusto a linhas irregulares)
-    map_data.cols = max(len(line) for line in lines) if lines else 0
+    map_data.rows   = len(lines)
+    map_data.cols   = max(len(line) for line in lines) if lines else 0
     map_data.width  = map_data.cols * TILE_SIZE
     map_data.height = map_data.rows * TILE_SIZE
 
-    # Garante que todas as linhas têm o mesmo comprimento
     map_data.grid = [
         list(line.ljust(map_data.cols, "O"))
         for line in lines
