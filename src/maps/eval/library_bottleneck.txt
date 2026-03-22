@@ -22,8 +22,8 @@ O..............................................................................O
 O..............................................................................O
 O.......................HHHHHH.................HHHHHH..........................O
 O.......................HHHHHH.................HHHHHH..........................O
-O.......................HHHHHH.....O...........HHHHHH..O.......................O
-OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO.....OOOOOOOOOOHHH.OOOOOOOOOOOOOOOOOOOOOOOOOO
+O.......................HHHHHH.................HHHHHH..........................O
+OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO............OOOOHHHOOOOOOOOOOOOOOOOOOOOOOOOOOO
 OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO...EEEEEE...OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
 OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO...EEEEEE...OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
 OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO............OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
