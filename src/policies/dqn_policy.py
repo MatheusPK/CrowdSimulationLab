@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from core.dqn_mode import DQNMode
-from simulation_params import DQN_GRAD_CLIP_NORM, PER_ALPHA, PER_BETA_START, PER_BETA_FRAMES
+from simulation_params import DQN_GRAD_CLIP_NORM, PER_ALPHA, PER_BETA_START, PER_BETA_FRAMES, DQN_UPDATE_EVERY
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +152,7 @@ class DQNPolicy:
         per_alpha: float = PER_ALPHA,
         per_beta_start: float = PER_BETA_START,
         per_beta_frames: int = PER_BETA_FRAMES,
+        update_every: int = DQN_UPDATE_EVERY,
         device: str | None = None,
     ):
         self.mode               = mode
@@ -167,6 +168,8 @@ class DQNPolicy:
         self.epsilon_decay      = epsilon_decay
         self.per_beta_start     = per_beta_start
         self.per_beta_frames    = per_beta_frames
+        self.update_every       = update_every
+        self._transition_count  = 0   # conta transições desde o último update
 
         if device is not None:
             self.device = torch.device(device)
@@ -217,8 +220,10 @@ class DQNPolicy:
             return
         self.buffer.push(obs, action, reward, next_obs, done)
         if len(self.buffer) >= self.train_start_size:
-            self.steps_done += 1
-            self._update()
+            self._transition_count += 1
+            if self._transition_count % self.update_every == 0:
+                self.steps_done += 1
+                self._update()
 
     def save(self, path: str | None = None):
         target = path if path is not None else self.model_path
@@ -229,9 +234,10 @@ class DQNPolicy:
         return self._current_epsilon()
 
     def reset_for_stage(self, stage_decay: int, epsilon_start: float = 1.0):
-        self.steps_done    = 0
-        self.epsilon_decay = stage_decay
-        self.epsilon_start = epsilon_start
+        self.steps_done       = 0
+        self._transition_count = 0
+        self.epsilon_decay    = stage_decay
+        self.epsilon_start    = epsilon_start
 
     # ------------------------------------------------------------------
     # Internos

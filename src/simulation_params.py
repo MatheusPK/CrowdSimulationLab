@@ -220,19 +220,30 @@ DQN_EPSILON_DECAY       = 1_600_000  # fallback global — usado se o stage não
 # Alvo: eps chega a 0.05 aproximadamente no ep mediano de promoção.
 # stages de dilema (6, 9, 11) usam valores maiores para manter exploração
 # suficiente para descobrir rotas alternativas ao hazard.
+# NOTA: valores recalibrados para DQN_UPDATE_EVERY=4.
+# Com UPDATE_EVERY=4, steps_done cresce N/4 por env step (não N).
+# Dividir por 4 garante que epsilon chega a 0.05 no mesmo episódio mediano —
+# o perfil de exploração por episódio é idêntico ao da versão anterior.
+# Fórmula: decay = N × avg_steps × ep_mediano / UPDATE_EVERY
 STAGE_EPSILON_DECAY = [
-     70_000,   # stage 1  mall_small            N=4,  ~780 t/ep,  ep_med ~90
-     70_000,   # stage 2  school_small           N=4,  ~780 t/ep,  ep_med ~90
-     78_000,   # stage 3  office_wing_small      N=4,  ~780 t/ep,  ep_med ~100
-     94_000,   # stage 4  library_small          N=4,  ~780 t/ep,  ep_med ~120
-    234_000,   # stage 5  library_medium         N=6,  ~1560 t/ep, ep_med ~150
-    164_000,   # stage 6  hazard_corridor_small  N=4,  ~910 t/ep,  ep_med ~180
-    624_000,   # stage 7  school_floor           N=8,  ~2080 t/ep, ep_med ~300 ← corrigido
-    780_000,   # stage 8  office_wing_medium     N=10, ~2600 t/ep, ep_med ~300 ← corrigido
-  1_228_500,   # stage 9  hazard_bypass_medium   N=12, ~3510 t/ep, ep_med ~350 ← dilema crítico
-  1_053_000,   # stage 10 mall_medium            N=12, ~3510 t/ep, ep_med ~300 ← corrigido
-  1_228_500,   # stage 11 hazard_dense_office    N=12, ~3510 t/ep, ep_med ~350 ← dilema
-  1_053_000,   # stage 12 library_hard           N=12, ~3510 t/ep, ep_med ~300 ← corrigido
+     17_500,   # stage 1  mall_small             N=4,  ep_med ~58
+     17_500,   # stage 2  school_small            N=4,  ep_med ~58
+     19_500,   # stage 3  office_wing_small       N=4,  ep_med ~65
+     23_500,   # stage 4  library_small           N=4,  ep_med ~78
+     58_500,   # stage 5  library_medium          N=6,  ep_med ~98
+     41_000,   # stage 6  hazard_corridor_small   N=4,  ep_med ~117
+    156_000,   # stage 7  school_floor            N=8,  ep_med ~195
+    195_000,   # stage 8  office_wing_medium      N=10, ep_med ~195
+    # ── 4 stages-ponte (v4) ──────────────────────────────────────────────
+    214_500,   # stage 9a bridge_open_medium      N=11, ep_med ~195
+    214_500,   # stage 9b bridge_corridor_medium  N=11, ep_med ~195
+    234_000,   # stage 9c bridge_hazard_intro     N=12, ep_med ~186
+    234_000,   # stage 9d bridge_multi_exit       N=12, ep_med ~186
+    # ── stages originais (agora 13-16) ───────────────────────────────────
+    307_125,   # stage 13 hazard_bypass_medium    N=12, ep_med ~228  ★ dilema
+    263_250,   # stage 14 mall_medium             N=12, ep_med ~195
+    307_125,   # stage 15 hazard_dense_office     N=12, ep_med ~228  ★ dilema
+    263_250,   # stage 16 library_hard            N=12, ep_med ~195
 ]
 
 # Gradient clipping (estabiliza treino com reward shaping)
@@ -314,3 +325,47 @@ CURRICULUM_PATIENCE            = 500    # máx de episódios por stage antes de 
                                          # (FSM + contágio + hazard + multi-exit juntos) precisa de mais
                                          # experiência. Xu et al. 2021 usaram ~30k ep num ambiente simples.
 CURRICULUM_SAVE_EVERY          = 50     # salva checkpoint a cada N episódios
+
+# Early patience: aborta stage rapidamente se aprendizado claramente parado.
+# Evita acumular centenas de episódios de transições ruins no buffer
+# (causa raiz do catastrophic forgetting S9→S10-S12 diagnosticado nos logs).
+#
+# Condição: se avg30 < THRESHOLD após AFTER episódios → avança + reseta buffer.
+CURRICULUM_EARLY_PATIENCE_AFTER     = 200   # episódios mínimos antes de verificar
+CURRICULUM_EARLY_PATIENCE_THRESHOLD = 0.15  # avg30 mínimo após os N episódios acima
+
+# Raio de contágio reduzido para stages com N≥12 e hazard >5%.
+# CONTAGION_RADIUS=35px com N=12 cria cascata emocional irrecuperável
+# (diagnosticado no S9: avg chegou a 0.50 ep230 mas não consolidou).
+# Com 20px o contágio fica restrito a vizinhos imediatos (~2 tiles).
+CONTAGION_RADIUS_HIGH_N  = 20.0   # px — ativado quando N e hazard% atingem threshold
+N_CONTAGION_THRESHOLD    = 12     # N mínimo para ativar raio reduzido
+HAZARD_CONTAGION_PCTG    = 0.05   # fração de tiles H/total para ativar raio reduzido
+
+# ══════════════════════════════════════════════════════════════════════
+# 9. PERFORMANCE — frequência de update do DQN
+# ══════════════════════════════════════════════════════════════════════
+
+# UPDATE_EVERY: faz 1 gradient step a cada N transições armazenadas,
+# em vez de 1 por agente por step (comportamento anterior = 12x/step).
+#
+# Problema diagnosticado:
+#   Com N=12 agentes, store_transition() chamava _update() 12x por env step.
+#   Isso gerava ~5.400 gradient steps/ep (12 × 450 steps), dominando o tempo
+#   de treino mesmo sem render. O render representava apenas ~7-20% do total.
+#
+# UPDATE_EVERY=4 significa: acumula 4 transições, então faz 1 update.
+# Equivale a fazer ~1350 updates/ep (5400/4) — 4x menos que antes,
+# mas ainda ~3x mais que o padrão DQN single-agent (450/ep).
+# Mantém amostragem rica do PER sem saturar o CPU.
+#
+# Impacto no tempo (estimado):
+#   Antes:  4.5–12.6s/ep  (domina tudo, render irrelevante)
+#   Depois: ~1.5–4.0s/ep  (redução ~3-4x)
+#   render: ~0.9s/ep      (agora sim representa ~20-60% — faz diferença desligar)
+#
+# Qualidade de aprendizado:
+#   UPDATE_EVERY=1: 1 update por env step (padrão DeepMind single-agent)
+#   UPDATE_EVERY=4: balança velocidade e amostragem — recomendado para N=12
+#   UPDATE_EVERY=12: 1 update por "rodada" de todos os agentes (mínimo aceitável)
+DQN_UPDATE_EVERY = 4

@@ -30,12 +30,15 @@ from simulation_params import (
 
 
 class Environment:
-    def __init__(self, map_data, dt=0.1, max_steps=300, use_fsm=False, num_agents=1):
+    def __init__(self, map_data, dt=0.1, max_steps=300, use_fsm=False, num_agents=1,
+                 contagion_radius: float | None = None):
         self.map_data = map_data
         self.dt = dt
         self.max_steps = max_steps
         self.use_fsm = use_fsm
         self.num_agents_requested = num_agents
+        # Melhoria 2: permite override do raio de contágio por stage
+        self.contagion_radius = contagion_radius if contagion_radius is not None else CONTAGION_RADIUS
 
         self.agents = []
         self.time = 0
@@ -636,7 +639,7 @@ class Environment:
         neighbors = [
             o for o in self.agents
             if o is not agent and not o.evacuated
-            and math.hypot(agent.x - o.x, agent.y - o.y) <= CONTAGION_RADIUS
+            and math.hypot(agent.x - o.x, agent.y - o.y) <= self.contagion_radius
         ]
         if neighbors:
             avg_neighbor_emotion = sum(o.emotion_level for o in neighbors) / len(neighbors)
