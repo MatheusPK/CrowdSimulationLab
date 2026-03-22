@@ -34,12 +34,10 @@ TRAIN_MAPS = {
 
     # Médios — 36×80, hazard leve (introdução da FSM)
     "library_medium":     "maps/train/library_medium.txt",
-    "mall_food_court":    "maps/train/mall_food_court.txt",
     "school_floor":       "maps/train/school_floor.txt",
     "office_wing_medium": "maps/train/office_wing_medium.txt",
 
     # Médios — 36×80, hazard e layout mais complexo (currículo v2)
-    "office_complex_real":    "maps/train/office_complex_real.txt",
     "mall_medium":            "maps/train/mall_medium.txt",
     "library_hard":           "maps/train/library_hard.txt",
     "di_style":               "maps/train/di_style.txt",
@@ -67,8 +65,8 @@ ALL_MAPS = {
     "di_primeiro_andar": "maps/DI_primeiro_andar.txt",
 }
 
-SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
-MAP      = list(ALL_MAPS.values())[14]       # <-- mapa
+SCENARIO = AppScenario.ASTAR          # <-- cenário
+MAP      = list(ALL_MAPS.values())[18]       # <-- mapa
 AGENTS   = 20                             # <-- número de agentes
 
 # ── Parâmetros gerais ─────────────────────────────────────────────────────────
@@ -84,7 +82,7 @@ ASTAR_HAZARD_COST = ASTAR_HAZARD_COST  # importado de simulation_params
 
 DQN = {
     "mode":               DQNMode.EVAL,
-    "model_path":         "models/dqn_fsm.pth",
+    "model_path":         "model_candidate_1_goodUntil8thStage/ckpt_s12_ep3475.pth",
     "episodes":           500,
     "hidden_dim":         DQN_HIDDEN_DIM,
     "batch_size":         DQN_BATCH_SIZE,
