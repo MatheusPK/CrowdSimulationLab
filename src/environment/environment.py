@@ -454,7 +454,73 @@ class Environment:
                  sum(y for x, y in pts) / len(pts))
                 for pts in groups.values()]
 
-    def _get_nearest_exit_centroid(self, agent, exit_obj) -> tuple[float, float]:
+    def _bfs_direction_vector(self, agent_row: int, agent_col: int,
+                               agent) -> tuple[float, float]:
+        """
+        Retorna o vetor (dx, dy) do agente até o centro do próximo tile no
+        caminho BFS ótimo para o exit mais próximo.
+
+        Algoritmo: encontra o vizinho (8-conectado) com menor dist_map —
+        o mesmo gradiente que o BFS segue. O vetor aponta para o centro
+        desse tile, garantindo que sempre respeita paredes e corredores.
+
+        Normalização: o vetor retornado está em pixels (não normalizado).
+        A normalização por max_dist é feita em get_observation.
+
+        Fallback euclidiano: quando dist_map=inf (agente fora do grafo BFS,
+        ex: empurrado para dentro de um obstáculo por crowding extremo),
+        usa o vetor para o centróide do exit mais próximo. Explícito e
+        documentado em vez de silencioso como antes.
+        """
+        dm = self._dist_map
+        rows = self.map_data.rows
+        cols = self.map_data.cols
+        tile = self.map_data.tile_size
+
+        current_dist = dm[agent_row][agent_col]
+
+        # Fallback euclidiano quando agente está fora do grafo BFS
+        if current_dist == float("inf"):
+            exit_obj = self.get_nearest_exit_bfs(agent)
+            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
+            return exit_cx - agent.x, exit_cy - agent.y
+
+        # Já está num tile E → vetor para o centróide do exit group
+        if self.map_data.grid[agent_row][agent_col] == "E":
+            exit_obj = self.get_nearest_exit_bfs(agent)
+            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
+            return exit_cx - agent.x, exit_cy - agent.y
+
+        # Encontra o vizinho com menor dist_map (próximo passo ótimo)
+        best_dist = current_dist
+        best_r, best_c = agent_row, agent_col
+
+        dirs = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
+        for dr, dc in dirs:
+            nr, nc = agent_row + dr, agent_col + dc
+            if not (0 <= nr < rows and 0 <= nc < cols):
+                continue
+            # Anti corner-cutting para diagonais
+            if dr != 0 and dc != 0:
+                if (self.map_data.grid[agent_row + dr][agent_col] == "O" or
+                        self.map_data.grid[agent_row][agent_col + dc] == "O"):
+                    continue
+            if dm[nr][nc] < best_dist:
+                best_dist = dm[nr][nc]
+                best_r, best_c = nr, nc
+
+        # Se não encontrou vizinho melhor (já no mínimo local), aponta para exit
+        if (best_r, best_c) == (agent_row, agent_col):
+            exit_obj = self.get_nearest_exit_bfs(agent)
+            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
+            return exit_cx - agent.x, exit_cy - agent.y
+
+        # Vetor para o centro do próximo tile BFS
+        next_cx = best_c * tile + tile / 2.0
+        next_cy = best_r * tile + tile / 2.0
+        return next_cx - agent.x, next_cy - agent.y
+
+
         """
         Retorna o centróide do grupo de exit ao qual exit_obj pertence.
 
@@ -861,23 +927,21 @@ class Environment:
             obs[16] = 1.0
             return obs
 
-        # Exit target: usa o CENTRÓIDE do grupo de exit (tiles E contíguos agrupados)
-        # em vez do tile individual mais próximo.
+        # Direção ao próximo passo BFS ótimo — substitui o vetor euclidiano.
         #
-        # Problema sem este fix: map_loader cria 1 Exit object por tile E.
-        # get_nearest_exit_bfs retorna o tile mais próximo por BFS gradient.
-        # Conforme o agente se move continuamente, o tile "mais próximo" muda
-        # discretamente (ex: de col 47 para col 48), causando um salto em dx_exit
-        # que pode inverter o sinal de feature[2]. A Q-function aprende que Q(E) ≈ Q(W)
-        # perto do exit, gerando oscilação lateral ("spinning").
+        # Problema com vetor euclidiano (dx = exit_cx - agent.x):
+        #   Aponta geometricamente para o centróide do exit, atravessando paredes.
+        #   Em mapas com corredores internos, o agente vê "exit está para sul" mas
+        #   uma parede bloqueia o sul — conflito de sinal que exige muitos episódios
+        #   para resolver por experiência. Em mapas de eval não vistos, falha completamente.
         #
-        # Fix: usa o centróide estável do grupo de exit inteiro → dx_exit varia
-        # suavemente com a posição do agente, sem saltos discretos entre tiles.
-        exit_obj = self.get_nearest_exit_bfs(agent)
-        exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
-
-        dx_exit = exit_cx - agent.x
-        dy_exit = exit_cy - agent.y
+        # Solução — vetor BFS:
+        #   Encontra o tile vizinho com menor dist_map (próximo passo ótimo).
+        #   Aponta para o centro desse tile — sempre respeita paredes e corredores.
+        #   Muda suavemente conforme o agente avança pelo caminho ótimo.
+        #   Fallback para vetor euclidiano quando dist_map=inf (agente fora do grafo).
+        row, col = self.world_to_cell(agent.x, agent.y)
+        dx_exit, dy_exit = self._bfs_direction_vector(row, col, agent)
 
         max_dist = math.hypot(self.map_data.width, self.map_data.height)
         max_hazard_dist = HAZARD_VISION_RADIUS * 2.0
@@ -901,10 +965,10 @@ class Environment:
         return [
             agent.x / self.map_data.width,
             agent.y / self.map_data.height,
-            dx_exit / self.map_data.width,
-            dy_exit / self.map_data.height,
-            bfs_dist_norm,                                           # [4] BFS, não euclid
-            angle_to_exit,
+            dx_exit / max_dist,   # [2] componente X do próximo passo BFS (normalizado)
+            dy_exit / max_dist,   # [3] componente Y do próximo passo BFS (normalizado)
+            bfs_dist_norm,        # [4] BFS dist normalizada pela diagonal
+            angle_to_exit,        # [5] ângulo do próximo passo BFS em [-1,1]
             haz_visible,
             haz_dist_norm,
             in_hazard,

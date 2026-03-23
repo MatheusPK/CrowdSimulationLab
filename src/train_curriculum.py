@@ -43,31 +43,35 @@ from simulation_params import (
 # ep_alvo = 85% do ep_promoção esperado para o stage
 
 CURRICULUM = [
-    # Stages 1-4: navegação e FSM básica (N=4)
-    # Decay reduzido ~50%: com NO_PROGRESS=-1.0, o agente aprende por
-    # reforço negativo forte e não precisa de exploração prolongada.
+    # Stages 1-4: navegação básica — top e side exits (N=4)
     ("mall_small",              "maps/train/mall_small.txt",              4,  300,   32_500),
     ("school_small",            "maps/train/school_small.txt",            4,  300,   45_000),
     ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300,   45_000),
     ("library_small",           "maps/train/library_small.txt",           4,  300,   45_000),
-    # Stage 5: primeiro contato com dinâmica coletiva (N=6)
+    # Stages 5-6: exit EMBAIXO — generalização de direção de saída (N=4)
+    # Sem esses stages, o modelo aprende que exits ficam sempre em topo/lateral.
+    # mall_small_bottom e library_small_bottom são as mesmas salas com exit
+    # na parede sul — forçam o agente a aprender "ir para baixo" também.
+    ("mall_small_bottom",       "maps/train/mall_small_bottom.txt",       4,  300,   45_000),
+    ("library_small_bottom",    "maps/train/library_small_bottom.txt",    4,  300,   45_000),
+    # Stage 7: primeiro contato com dinâmica coletiva (N=6)
     ("library_medium",          "maps/train/library_medium.txt",          6,  400,   85_000),
-    # Stage 6: dilema de rota com hazard lateral (N=4) — decay reduzido 50%
+    # Stage 8: dilema de rota com hazard lateral (N=4)
     ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350,   41_650),
-    # Stage 6b: hazard frente ao exit (N=6) — mantém exploração para dilema de rota
+    # Stage 9: hazard frente ao exit (N=6)
     ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350,  150_000),
-    # Stage 7: escala coletiva gradual (N=8)
+    # Stage 10: escala coletiva gradual (N=8)
     ("school_floor",            "maps/train/school_floor.txt",            8,  400,  190_400),
-    # Stage 8: base antes de N=12 (N=10)
+    # Stage 11: base antes de N=12 (N=10)
     ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400,  238_000),
-    # Stage 8b: hazard no corredor do exit, replica padrão office_single_exit (N=10)
+    # Stage 12: hazard no corredor do exit (N=10)
     ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420,  249_900),
-    # Stages 9-12: ponte N=11→12, sem hazard → hazard suave
+    # Stages 13-16: ponte N=11→12
     ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400,  290_000),
     ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400,  290_000),
     ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420,  330_000),
     ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420,  299_880),
-    # Stages 13-16: hazard real, dilema de rota, alta densidade (N=12)
+    # Stages 17-20: hazard real, alta densidade (N=12)
     ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450,  436_050),
     ("mall_medium",             "maps/train/mall_medium.txt",            12,  450,  367_200),
     ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450,  436_050),
