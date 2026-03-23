@@ -1,22 +1,3 @@
-"""
-main.py — entrypoint para rodar e avaliar qualquer política.
-
-Uso:
-    python main.py                        # usa config.py como está
-    python main.py --no-render            # sem janela (mais rápido)
-    python main.py --episodes 30          # número de episódios
-    python main.py --log                  # salva resultados em logs/results.csv
-    python main.py --no-render --episodes 30 --log  # combinando flags
-
-Para treino DQN com currículo progressivo:
-    python train_curriculum.py            # treino completo
-    python train_curriculum.py --stage 6  # começa no stage 6
-    python train_curriculum.py --eval     # avalia nos 5 mapas eval
-
-NOTA: main.py é exclusivamente para execução e avaliação de políticas
-já treinadas. Nunca use main.py com DQN mode=TRAIN — use train_curriculum.py.
-"""
-
 import argparse
 import csv
 import os
@@ -51,7 +32,6 @@ def build_renderer(map_data, title: str) -> Renderer | None:
 # ── Loop de episódio ──────────────────────────────────────────────────────────
 
 def run_episode(env: Environment, policy, renderer: Renderer | None) -> dict:
-    """Roda um episódio completo e retorna as métricas."""
     obs_list = env.reset()
 
     done    = False
@@ -159,7 +139,6 @@ def main():
     if args.no_render:
         cfg.RENDER = False
 
-    # Guarda contra uso acidental de main.py para treino DQN
     if cfg.SCENARIO == AppScenario.DQN_FSM and cfg.DQN.get("mode") == DQNMode.TRAIN:
         print("ERRO: main.py não deve ser usado para treino DQN.")
         print("Use: python train_curriculum.py")
@@ -178,6 +157,8 @@ def main():
         use_fsm=(cfg.SCENARIO in (AppScenario.ASTAR_FSM, AppScenario.DQN_FSM)),
         num_agents=cfg.AGENTS,
     )
+
+    print(cfg.DQN["model_path"])
 
     policy = PolicyFactory.build(env)
 

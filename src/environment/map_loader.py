@@ -43,7 +43,7 @@ def load_map(file_path: str) -> MapData:
             elif char == "E":
                 map_data.exits.append(Exit(x, y, TILE_SIZE, TILE_SIZE))
             elif char == "H":
-                map_data.hazards.append(Hazard(x, y, TILE_SIZE, TILE_SIZE, intensity=1))
+                map_data.hazards.append(Hazard(x, y, TILE_SIZE, TILE_SIZE))
             elif char == "S":
                 map_data.spawns.append((row, col))
 

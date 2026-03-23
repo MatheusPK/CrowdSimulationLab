@@ -38,7 +38,6 @@ class Environment:
         self.max_steps = max_steps
         self.use_fsm = use_fsm
         self.num_agents_requested = num_agents
-        # Melhoria 2: permite override do raio de contágio por stage
         self.contagion_radius = contagion_radius if contagion_radius is not None else CONTAGION_RADIUS
 
         self.agents = []
@@ -57,11 +56,6 @@ class Environment:
         }
 
         # dist_map[row][col] = distância BFS em tiles ao exit mais próximo.
-        # Propaga por todos os tiles não-O (sem filtro de clearance por raio).
-        # Razão: clearance com raio=6px marca ~30% dos tiles como inf, tornando
-        # o gradiente de progresso esparso e retardando o aprendizado.
-        # O anti-corner-cutting diagonal é mantido (correto fisicamente e impacto
-        # pequeno no DQN que aprende por experiência, não seguindo o gradiente).
         self._dist_map: list[list[float]] = self._build_dist_map()
 
         # dist_map_safe: mesma lógica, mas penalizando tiles H (para A*+FSM).
@@ -70,10 +64,10 @@ class Environment:
         # Cache de densidade por step — populado em step(), None fora do loop
         self._density_cache: dict | None = None
 
-        # Conjunto de obstacles adjacentes a exits (para suprimir avoidance).
+        # Conjunto de obstacles adjacentes a exits
         self._exit_adjacent_obstacles: set = self._build_exit_adjacent_set()
 
-        # Centróides dos grupos de exits — features [2-3] estáveis na observação.
+        # Centróides dos grupos de exits
         self._exit_group_centroids: list = self._build_exit_group_centroids()
 
     # ------------------------------------------------------------------
@@ -81,22 +75,6 @@ class Environment:
     # ------------------------------------------------------------------
 
     def _build_dist_map(self) -> list[list[float]]:
-        """
-        BFS multi-source partindo de todos os tiles 'E' simultaneamente.
-        Retorna dist_map[row][col] = número de tiles ao exit mais próximo.
-
-        Sem filtro de clearance por raio do agente:
-          Usar clearance (radius=6px) marcava ~30% dos tiles como inf, tornando
-          o gradiente de progresso esparso. Com epsilon alto nos primeiros episódios,
-          o agente em tile sem clearance só aprende pelo EVACUATED descontado
-          (γ^20 × 80 ≈ 65) — muito fraco. Sem clearance, o gradiente é denso
-          (~85% dos tiles) e o aprendizado converge bem mais rápido.
-
-        Anti-corner-cutting diagonal mantido:
-          Um passo diagonal só é válido se ambas as células ortogonais
-          intermediárias também são não-O. Fisicamente correto e impacto pequeno
-          no DQN (que aprende por experiência de colisão, não seguindo o BFS).
-        """
         rows = self.map_data.rows
         cols = self.map_data.cols
         grid = self.map_data.grid
@@ -126,8 +104,7 @@ class Environment:
                     continue
                 if nc >= len(grid[nr]) or grid[nr][nc] == "O":
                     continue
-                # Anti corner-cutting: diagonal só válida se ambas as células
-                # ortogonais intermediárias são navegáveis (não-O).
+
                 if dr != 0 and dc != 0:
                     if (grid[r + dr][c] == "O" or
                             r + dr < 0 or r + dr >= rows or
@@ -140,13 +117,6 @@ class Environment:
         return dist
 
     def _build_dist_map_safe(self) -> list[list[float]]:
-        """
-        Dijkstra multi-source partindo de todos os exits, penalizando tiles H.
-        Mesma lógica do _build_dist_map (sem clearance, com anti-corner-cutting).
-
-        Custo: 'O' → inacessível | 'H' → ASTAR_HAZARD_COST | demais → 1.0
-        Usado pelo A*+FSM para escolher o exit com caminho seguro.
-        """
         rows = self.map_data.rows
         cols = self.map_data.cols
         grid = self.map_data.grid
@@ -176,7 +146,7 @@ class Environment:
                     continue
                 if nc >= len(grid[nr]) or grid[nr][nc] == "O":
                     continue
-                # Anti corner-cutting
+
                 if dr != 0 and dc != 0:
                     if (grid[r + dr][c] == "O" or
                             r + dr < 0 or r + dr >= rows or
@@ -192,13 +162,6 @@ class Environment:
         return dist
 
     def dist_to_exit(self, agent) -> float:
-        """
-        Distância BFS em pixels ao exit mais próximo navegável.
-        Usa dist_map[row][col] × tile_size para converter tiles → pixels.
-
-        Retorna inf se o agente estiver numa célula inacessível
-        (ex: foi empurrado para dentro de um obstáculo).
-        """
         row, col = self.world_to_cell(agent.x, agent.y)
         tiles = self._dist_map[row][col]
         if tiles == float("inf"):
@@ -215,7 +178,7 @@ class Environment:
 
         import random
         available_spawns = list(self.map_data.spawns)
-        random.shuffle(available_spawns)  # spawn order aleatorio a cada episodio
+        random.shuffle(available_spawns)
         num_to_create = min(self.num_agents_requested, len(available_spawns))
 
         if num_to_create <= 0:
@@ -262,10 +225,6 @@ class Environment:
             for agent in self.agents
         ]
 
-        # FIX: cache de densidade local calculado uma vez por step.
-        # Sem isso, compute_reward e get_observation chamam local_density()
-        # individualmente, resultando em O(n²) por agente por step.
-        # O cache é um dict {id(agent): count} válido apenas para este step.
         self._density_cache = self._compute_density_cache()
 
         reward_list = []
@@ -360,7 +319,6 @@ class Environment:
         if not moved_any:
             agent.stop()
 
-        # Tracking de contato com hazard para métricas
         if self.touches_hazard(agent):
             agent.touched_hazard = True
 
@@ -368,14 +326,11 @@ class Environment:
             if not agent.evacuated:
                 agent.evacuated = True
                 agent.evacuation_time = self.time
-                # Registra qual exit foi usado
                 for exit_obj in self.map_data.exits:
                     if self.circle_intersects_rect(agent.x, agent.y, agent.radius, exit_obj):
                         agent.exit_used = exit_obj
                         break
-                # Move o agente para fora dos limites do mapa — ele saiu do ambiente.
-                # Isso garante que não bloqueia outros agentes no exit nem aparece
-                # no renderer, sem precisar de lógica extra em nenhum outro lugar.
+
                 agent.x = -9999.0
                 agent.y = -9999.0
             agent.stop()
@@ -383,19 +338,6 @@ class Environment:
         return collided
 
     def _build_exit_adjacent_set(self) -> set:
-        """
-        Retorna o conjunto de objetos Obstacle cujo ponto mais próximo está a
-        ≤ 2×TILE_SIZE px de qualquer tile Exit.
-
-        Raio de 2 tiles (16px) em vez de 1 tile:
-          Com 1 tile, apenas os tiles IMEDIATAMENTE adjacentes ao vão eram suprimidos.
-          Agentes que chegavam pela borda do exit (não pelo centro) ainda sentiam força
-          de tiles a 1.5 tiles de distância (~34 px/s), causando spin nos cantos.
-          Com 2 tiles, a zona neutra cobre completamente o vão + 1 tile extra de cada lado,
-          garantindo que qualquer ponto dentro do exit tem força zero de parede.
-
-        Complexidade: O(|obstacles| × |exits|) — roda uma vez no __init__.
-        """
         tile = self.map_data.tile_size
         adjacent = set()
         for obs in self.map_data.obstacles:
@@ -411,14 +353,6 @@ class Environment:
         return adjacent
 
     def _build_exit_group_centroids(self) -> list[tuple[float, float]]:
-        """
-        Agrupa tiles E contíguos (4-conectado) e retorna o centróide de cada grupo.
-
-        Usado em get_observation para calcular dx_exit/dy_exit a partir do centróide
-        do exit group, não do tile individual mais próximo. Sem isso, o target salta
-        discretamente entre tiles vizinhos conforme o agente se move, gerando features
-        [2-3] instáveis que causam oscilação na Q-function perto da saída.
-        """
         exits = self.map_data.exits
         if not exits:
             return []
@@ -442,7 +376,6 @@ class Environment:
                 if neighbor:
                     union(e, neighbor)
 
-        # Calcular centróide por grupo
         groups: dict = {}
         for e in exits:
             root = find(e)
@@ -455,23 +388,7 @@ class Environment:
                 for pts in groups.values()]
 
     def _bfs_direction_vector(self, agent_row: int, agent_col: int,
-                               agent) -> tuple[float, float]:
-        """
-        Retorna o vetor (dx, dy) do agente até o centro do próximo tile no
-        caminho BFS ótimo para o exit mais próximo.
-
-        Algoritmo: encontra o vizinho (8-conectado) com menor dist_map —
-        o mesmo gradiente que o BFS segue. O vetor aponta para o centro
-        desse tile, garantindo que sempre respeita paredes e corredores.
-
-        Normalização: o vetor retornado está em pixels (não normalizado).
-        A normalização por max_dist é feita em get_observation.
-
-        Fallback euclidiano: quando dist_map=inf (agente fora do grafo BFS,
-        ex: empurrado para dentro de um obstáculo por crowding extremo),
-        usa o vetor para o centróide do exit mais próximo. Explícito e
-        documentado em vez de silencioso como antes.
-        """
+                            agent) -> tuple[float, float]:
         dm = self._dist_map
         rows = self.map_data.rows
         cols = self.map_data.cols
@@ -479,19 +396,12 @@ class Environment:
 
         current_dist = dm[agent_row][agent_col]
 
-        # Fallback euclidiano quando agente está fora do grafo BFS
         if current_dist == float("inf"):
-            exit_obj = self.get_nearest_exit_bfs(agent)
-            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
-            return exit_cx - agent.x, exit_cy - agent.y
+            return self._vector_to_nearest_exit_tile(agent)
 
-        # Já está num tile E → vetor para o centróide do exit group
         if self.map_data.grid[agent_row][agent_col] == "E":
-            exit_obj = self.get_nearest_exit_bfs(agent)
-            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
-            return exit_cx - agent.x, exit_cy - agent.y
+            return self._vector_to_nearest_exit_tile(agent)
 
-        # Encontra o vizinho com menor dist_map (próximo passo ótimo)
         best_dist = current_dist
         best_r, best_c = agent_row, agent_col
 
@@ -500,7 +410,6 @@ class Environment:
             nr, nc = agent_row + dr, agent_col + dc
             if not (0 <= nr < rows and 0 <= nc < cols):
                 continue
-            # Anti corner-cutting para diagonais
             if dr != 0 and dc != 0:
                 if (self.map_data.grid[agent_row + dr][agent_col] == "O" or
                         self.map_data.grid[agent_row][agent_col + dc] == "O"):
@@ -509,41 +418,12 @@ class Environment:
                 best_dist = dm[nr][nc]
                 best_r, best_c = nr, nc
 
-        # Se não encontrou vizinho melhor (já no mínimo local), aponta para exit
         if (best_r, best_c) == (agent_row, agent_col):
-            exit_obj = self.get_nearest_exit_bfs(agent)
-            exit_cx, exit_cy = self._get_nearest_exit_centroid(agent, exit_obj)
-            return exit_cx - agent.x, exit_cy - agent.y
+            return self._vector_to_nearest_exit_tile(agent)
 
-        # Vetor para o centro do próximo tile BFS
         next_cx = best_c * tile + tile / 2.0
         next_cy = best_r * tile + tile / 2.0
         return next_cx - agent.x, next_cy - agent.y
-
-
-        """
-        Retorna o centróide do grupo de exit ao qual exit_obj pertence.
-
-        Se houver apenas 1 grupo (mapa single-exit), retorna seu centróide.
-        Se houver múltiplos grupos, retorna o centróide do grupo mais próximo
-        do agente — determinado pelo exit_obj retornado pelo BFS.
-
-        O centróide é estável: não muda tile a tile conforme o agente se move,
-        eliminando os saltos discretos em dx_exit/dy_exit que causam spinning.
-        """
-        if not self._exit_group_centroids:
-            # Fallback: usa centro do tile individual (não deve ocorrer)
-            return exit_obj.x + exit_obj.width / 2.0, exit_obj.y + exit_obj.height / 2.0
-
-        if len(self._exit_group_centroids) == 1:
-            return self._exit_group_centroids[0]
-
-        # Múltiplos grupos: encontra o centróide mais próximo do exit_obj
-        tile_cx = exit_obj.x + exit_obj.width / 2.0
-        tile_cy = exit_obj.y + exit_obj.height / 2.0
-        best = min(self._exit_group_centroids,
-                   key=lambda c: math.hypot(c[0] - tile_cx, c[1] - tile_cy))
-        return best
 
     def compute_obstacle_avoidance(self, agent):
         fx, fy = 0.0, 0.0
@@ -599,9 +479,6 @@ class Environment:
             fx += nx * strength
             fy += ny * strength
 
-        # Com N=12 num gargalo, até 5 agentes a 6px acumulam ~225 px/s de força
-        # (4.5× a velocidade de 50 px/s) → jitter e REWARD_COLLISION falsos.
-        # Mesmo clamp já aplicado no obstacle avoidance.
         total = math.hypot(fx, fy)
         if total > agent.current_speed and total > 0.0:
             scale = agent.current_speed / total
@@ -686,18 +563,6 @@ class Environment:
         return best
 
     def get_nearest_exit_bfs(self, agent, use_safe_map: bool = False):
-        """
-        Retorna o exit mais próximo por distância de caminho navegável.
-
-        use_safe_map=True  → usa _dist_map_safe (penaliza hazard).
-                             Usado pelo A* para escolher o exit destino,
-                             garantindo que roteia pelo exit com caminho seguro.
-
-        use_safe_map=False → usa _dist_map limpo (sem penalidade de hazard).
-                             Usado pelo DQN para que ele aprenda por conta
-                             o tradeoff entre rota curta/perigosa e longa/segura,
-                             sem receber a resposta pré-calculada.
-        """
         row, col = self.world_to_cell(agent.x, agent.y)
 
         if len(self.map_data.exits) == 1:
@@ -706,18 +571,6 @@ class Environment:
         return self._nearest_exit_by_distmap(row, col, use_safe_map)
 
     def _nearest_exit_by_distmap(self, agent_row, agent_col, use_safe_map: bool = False):
-        """
-        Segue o gradiente do dist_map escolhido até chegar num tile E.
-
-        A descida greedy respeita anti-corner-cutting nas diagonais:
-        um passo diagonal (dr≠0, dc≠0) só é permitido se ambas as células
-        ortogonais intermediárias têm dist < inf (i.e., são navegáveis no BFS).
-        Isso mantém consistência com a forma como o dist_map foi construído.
-
-        Impacto prático: a função retorna o exit object correto na quase
-        totalidade dos casos mesmo sem o check (o dist_map já codifica as
-        restrições). O check existe para consistência conceitual.
-        """
         dm = self._dist_map_safe if use_safe_map else self._dist_map
         r, c = agent_row, agent_col
         rows, cols = self.map_data.rows, self.map_data.cols
@@ -741,8 +594,7 @@ class Environment:
                 nr, nc = r + dr, c + dc
                 if (nr, nc) in visited or not (0 <= nr < rows and 0 <= nc < cols):
                     continue
-                # Anti corner-cutting: diagonal só válida se ambas as células
-                # ortogonais intermediárias são navegáveis (dist < inf).
+
                 if dr != 0 and dc != 0:
                     if dm[r + dr][c] == float("inf") or dm[r][c + dc] == float("inf"):
                         continue
@@ -757,7 +609,6 @@ class Environment:
         return self.get_nearest_exit_by_agent_pos(agent_row, agent_col)
 
     def get_nearest_exit_by_agent_pos(self, row, col):
-        """Fallback euclid a partir de coordenadas de célula."""
         ax = col * self.map_data.tile_size + self.map_data.tile_size / 2.0
         ay = row * self.map_data.tile_size + self.map_data.tile_size / 2.0
         best, best_d = None, float("inf")
@@ -776,11 +627,6 @@ class Environment:
         return math.hypot(cx - agent.x, cy - agent.y)
 
     def _compute_density_cache(self) -> dict:
-        """
-        Calcula a densidade local de todos os agentes ativos em O(n²) uma única vez.
-        Retorna dict {id(agent): count} para consulta O(1) em compute_reward e
-        get_observation. Chamado uma vez por step() antes do loop de rewards.
-        """
         active = [a for a in self.agents if not a.evacuated]
         cache = {id(a): 0 for a in self.agents}
         radius = LOCAL_DENSITY_RADIUS
@@ -793,8 +639,6 @@ class Environment:
         return cache
 
     def local_density(self, agent, radius=None):
-        # Se o cache do step atual estiver disponível, usa ele (O(1)).
-        # Fallback para cálculo direto quando chamado fora do loop de step.
         if radius is None and hasattr(self, '_density_cache') and self._density_cache is not None:
             return self._density_cache.get(id(agent), 0)
         radius = radius if radius is not None else LOCAL_DENSITY_RADIUS
@@ -896,10 +740,7 @@ class Environment:
         """
         Vetor de 17 features — dimensão compatível com state_dim=17 no DQN.
 
-        Features de navegação [0-5] usam distância BFS (dist_map) em vez de
-        euclidiana. Isso garante que o vetor de direção e a distância reflitam
-        a geometria real do mapa — crítico em mapas com corredores fechados
-        onde euclid e BFS podem diferir até 6x.
+        Features de navegação [0-5] usam distância BFS (dist_map)
 
         [0]  pos_x normalizada
         [1]  pos_y normalizada
@@ -920,26 +761,10 @@ class Environment:
         [16] evacuado (0/1)
         """
         if agent.evacuated:
-            # Retorna vetor zero com feature[16]=1.0 para sinalizar estado terminal.
-            # Sem isso, effective_done em dqn_policy._update usaria next_state[16]=0
-            # e bootstrapparia sobre o zero-state em vez de encerrar corretamente.
             obs = [0.0] * self.OBS_DIM
             obs[16] = 1.0
             return obs
 
-        # Direção ao próximo passo BFS ótimo — substitui o vetor euclidiano.
-        #
-        # Problema com vetor euclidiano (dx = exit_cx - agent.x):
-        #   Aponta geometricamente para o centróide do exit, atravessando paredes.
-        #   Em mapas com corredores internos, o agente vê "exit está para sul" mas
-        #   uma parede bloqueia o sul — conflito de sinal que exige muitos episódios
-        #   para resolver por experiência. Em mapas de eval não vistos, falha completamente.
-        #
-        # Solução — vetor BFS:
-        #   Encontra o tile vizinho com menor dist_map (próximo passo ótimo).
-        #   Aponta para o centro desse tile — sempre respeita paredes e corredores.
-        #   Muda suavemente conforme o agente avança pelo caminho ótimo.
-        #   Fallback para vetor euclidiano quando dist_map=inf (agente fora do grafo).
         row, col = self.world_to_cell(agent.x, agent.y)
         dx_exit, dy_exit = self._bfs_direction_vector(row, col, agent)
 
@@ -948,7 +773,6 @@ class Environment:
 
         angle_to_exit = math.atan2(dy_exit, dx_exit) / math.pi
 
-        # Distância BFS normalizada (feature [4])
         bfs_dist_px = self.dist_to_exit(agent)
         bfs_dist_norm = min(1.0, bfs_dist_px / max(1.0, max_dist))
 
@@ -965,10 +789,10 @@ class Environment:
         return [
             agent.x / self.map_data.width,
             agent.y / self.map_data.height,
-            dx_exit / max_dist,   # [2] componente X do próximo passo BFS (normalizado)
-            dy_exit / max_dist,   # [3] componente Y do próximo passo BFS (normalizado)
-            bfs_dist_norm,        # [4] BFS dist normalizada pela diagonal
-            angle_to_exit,        # [5] ângulo do próximo passo BFS em [-1,1]
+            dx_exit / max_dist,   
+            dy_exit / max_dist,   
+            bfs_dist_norm,        
+            angle_to_exit,
             haz_visible,
             haz_dist_norm,
             in_hazard,
@@ -983,7 +807,7 @@ class Environment:
         ]
 
     # ------------------------------------------------------------------
-    # Reward — reformulado para simular emoção e navegação realista
+    # Reward
     # ------------------------------------------------------------------
 
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:
@@ -997,10 +821,6 @@ class Environment:
         if agent.evacuated:
             reward += REWARD_EVACUATED
 
-        # Penaliza qualquer step sem avanço real (progress <= 0).
-        # Inclui progress=0 (agente parado ou acelerando dentro da mesma célula BFS)
-        # além do retrocesso real. Cria urgência forte para mover — comprovado
-        # empiricamente na versão que promoveu 12 stages.
         if progress <= 0 and not agent.evacuated:
             reward += REWARD_NO_PROGRESS
 
@@ -1037,20 +857,19 @@ class Environment:
     def get_episode_metrics(self) -> dict:
         """
         Retorna métricas completas do episódio para comparação entre políticas.
-        Chame ao final de cada episódio (após is_done() = True).
 
-        Métricas primárias (use para comparar A* vs A*+FSM vs DQN+FSM):
+        Métricas primárias:
           evacuation_rate        : fração de agentes que evacuaram
           mean_evacuation_time   : tempo médio de evacuação (só dos que evacuaram)
 
-        Métricas emocionais (sua contribuição central):
+        Métricas emocionais:
           mean_emotion_final     : média de emotion_level no último step
           peak_panic_ratio       : fração de agentes que atingiram FSMState.PANIC
           emotion_variance       : variância do emotion_level entre agentes
 
         Métricas de eficiência:
           collision_events       : número total de colisões no episódio
-          mean_speed_ratio       : velocidade média / base_speed (efeito da FSM)
+          mean_speed_ratio       : velocidade média / base_speed 
         """
         n = len(self.agents)
         if n == 0:
@@ -1062,26 +881,18 @@ class Environment:
         emotions = [a.emotion_level for a in self.agents]
         speeds = [a.current_speed for a in self.agents]
 
-        # M6: panic_rate
         panic_reached_count = sum(
             1 for a in self.agents
             if hasattr(a, "peak_emotion") and a.peak_emotion >= FSM_EVACUATE_TO_PANIC
         )
 
-        # M7: mean_peak_emotion
         peak_emotions = [a.peak_emotion for a in self.agents if hasattr(a, "peak_emotion")]
 
-        # M9: hazard_contact_rate
         hazard_touched_count = sum(
             1 for a in self.agents if getattr(a, "touched_hazard", False)
         )
 
-        # M10: exit_utilization (r_util de Xu 2021)
-        # Agrupa tiles E contíguos em regiões (um tile E por grupo pode ter vizinhos E).
-        # map_loader cria 1 Exit object por tile — precisamos agrupar antes de contar.
-        # Algoritmo: Union-Find por adjacência (4-conectado entre tiles E).
         def _group_exit_tiles(exits_list, tile_size):
-            """Retorna dict {exit_obj → group_id} agrupando tiles E adjacentes."""
             if not exits_list:
                 return {}
             positions = {(e.x, e.y): e for e in exits_list}
@@ -1115,14 +926,10 @@ class Environment:
             counts = list(exit_usage.values())
             r_util = min(counts) / max(counts) if max(counts) > 0 else 0.0
         elif len(exit_usage) == 1 and n_groups >= 2:
-            r_util = 0.0  # todos usaram um só exit quando havia alternativa
+            r_util = 0.0
         else:
             r_util = 1.0 if exit_usage else 0.0
 
-        # M4b: emotion ao momento de evacuação (não ao final do episódio)
-        # Requer que a emoção seja salva no momento da evacuação.
-        # Como o agente é movido para (-9999,-9999) ao evacuar, a emoção final
-        # não reflete o estado no momento da saída. Usamos peak_emotion como proxy.
         mean_emotion_at_evac = (
             sum(peak_emotions) / len(peak_emotions) if peak_emotions else 0.0
         )
@@ -1136,19 +943,19 @@ class Environment:
             "steps":                self.time,
             # M4 — emoção final
             "mean_emotion_final":   sum(emotions) / n,
-            # M4b — emoção no pico (proxy para emoção ao evacuar)
+            # M4b — emoção no pico
             "mean_peak_emotion":    sum(peak_emotions) / max(1, len(peak_emotions)),
-            # M4c — emoção média no momento da evacuação (peak_emotion como proxy)
+            # M4c — emoção média no momento da evacuação
             "mean_emotion_at_evac": mean_emotion_at_evac,
             # M5 — variância emocional
             "emotion_variance":     sum((e - sum(emotions)/n)**2 for e in emotions) / n,
             # M6 — taxa de pânico
             "panic_rate":           panic_reached_count / n,
-            # M8 — velocidade média (efeito FSM)
+            # M8 — velocidade média
             "mean_speed_ratio":     sum(speeds) / max(1, n) / max(1.0, self.agents[0].base_speed),
             # M9 — contato com hazard
             "hazard_contact_rate":  hazard_touched_count / n,
-            # M10 — utilização de exits (Xu 2021)
+            # M10 — utilização de exits
             "exit_utilization":     r_util,
         }
 

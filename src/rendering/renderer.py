@@ -6,11 +6,6 @@ from core.direction import DIRECTION_VECTORS
 from core.fsm_state import FSMState
 from simulation_params import FSM_CALM_TO_EVACUATE, FSM_EVACUATE_TO_PANIC
 
-
-# ---------------------------------------------------------------------------
-# Paleta de cores (fallback sem assets)
-# ---------------------------------------------------------------------------
-
 _COLOR_CALM     = (100, 180, 255)
 _COLOR_EVACUATE = ( 30,  80, 220)
 _COLOR_PANIC    = (110,  20, 180)
@@ -25,7 +20,6 @@ def _lerp_color(c1, c2, t):
 
 
 def emotion_to_color(emotion_level: float) -> tuple[int, int, int]:
-    """Mapeia emotion_level [0,1] → RGB entre CALM, EVACUATE e PANIC."""
     lo = FSM_CALM_TO_EVACUATE
     hi = FSM_EVACUATE_TO_PANIC
     if emotion_level <= lo:
@@ -42,19 +36,6 @@ _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "assets")
 
 
 class Renderer:
-    """
-    Renderer pygame com suporte a sprites PNG e escala visual.
-
-    O parâmetro `scale` amplia a janela e todos os elementos desenhados
-    sem afetar a simulação física — coordenadas internas permanecem em
-    pixels de simulação (tile=8px); só o desenho é multiplicado.
-
-    Assets esperados em assets/:
-        tile_floor.png, tile_obstacle.png, tile_hazard.png, agent_sprite.png
-
-    Pressionar SPACE pausa/retoma a renderização.
-    """
-
     def __init__(
         self,
         width,

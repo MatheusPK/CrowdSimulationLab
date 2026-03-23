@@ -1,7 +1,3 @@
-"""
-policy_factory.py — constrói a política correta para o cenário ativo em config.py.
-"""
-
 import config as cfg
 from core.app_scenario import AppScenario
 from core.dqn_mode import DQNMode

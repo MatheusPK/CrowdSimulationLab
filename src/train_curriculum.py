@@ -1,19 +1,3 @@
-"""
-train_curriculum.py — treino DQN com currículo progressivo.
-
-Estratégia: multi-agent parameter sharing.
-  Todos os agentes compartilham a mesma rede e contribuem transições
-  independentes para o replay buffer.
-
-Uso:
-    python train_curriculum.py                   # treino completo
-    python train_curriculum.py --stage 6         # começa no stage 6
-    python train_curriculum.py --eval            # avalia nos mapas eval
-    python train_curriculum.py --fine-tune       # fine-tuning em di_style
-    python train_curriculum.py --render          # com visualização
-    python train_curriculum.py --quiet           # sem prints detalhados
-"""
-
 import argparse
 import csv
 import json
@@ -37,41 +21,25 @@ from simulation_params import (
     CONTAGION_RADIUS_HIGH_N, N_CONTAGION_THRESHOLD, HAZARD_CONTAGION_PCTG,
 )
 
-# ── Currículo ─────────────────────────────────────────────────────────────────
-# (nome, caminho, n_agents, max_steps, epsilon_decay)
-# epsilon_decay = ep_alvo × (N × max_steps / UPDATE_EVERY)
-# ep_alvo = 85% do ep_promoção esperado para o stage
 
+# (nome, caminho, n_agents, max_steps, epsilon_decay)
 CURRICULUM = [
-    # Stages 1-4: navegação básica — top e side exits (N=4)
     ("mall_small",              "maps/train/mall_small.txt",              4,  300,   32_500),
     ("school_small",            "maps/train/school_small.txt",            4,  300,   45_000),
     ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300,   45_000),
     ("library_small",           "maps/train/library_small.txt",           4,  300,   45_000),
-    # Stages 5-6: exit EMBAIXO — generalização de direção de saída (N=4)
-    # Sem esses stages, o modelo aprende que exits ficam sempre em topo/lateral.
-    # mall_small_bottom e library_small_bottom são as mesmas salas com exit
-    # na parede sul — forçam o agente a aprender "ir para baixo" também.
     ("mall_small_bottom",       "maps/train/mall_small_bottom.txt",       4,  300,   45_000),
     ("library_small_bottom",    "maps/train/library_small_bottom.txt",    4,  300,   45_000),
-    # Stage 7: primeiro contato com dinâmica coletiva (N=6)
     ("library_medium",          "maps/train/library_medium.txt",          6,  400,   85_000),
-    # Stage 8: dilema de rota com hazard lateral (N=4)
     ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350,   41_650),
-    # Stage 9: hazard frente ao exit (N=6)
     ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350,  150_000),
-    # Stage 10: escala coletiva gradual (N=8)
     ("school_floor",            "maps/train/school_floor.txt",            8,  400,  190_400),
-    # Stage 11: base antes de N=12 (N=10)
     ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400,  238_000),
-    # Stage 12: hazard no corredor do exit (N=10)
     ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420,  249_900),
-    # Stages 13-16: ponte N=11→12
     ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400,  290_000),
     ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400,  290_000),
     ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420,  330_000),
     ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420,  299_880),
-    # Stages 17-20: hazard real, alta densidade (N=12)
     ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450,  436_050),
     ("mall_medium",             "maps/train/mall_medium.txt",            12,  450,  367_200),
     ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450,  436_050),
@@ -111,8 +79,6 @@ DQN_CFG = dict(
     update_every=DQN_UPDATE_EVERY,
 )
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def ensure_dirs():
     MODEL_DIR.mkdir(exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
@@ -149,7 +115,6 @@ def build_env(map_path, n_agents, max_steps, contagion_radius=None):
     return Environment(**kwargs)
 
 def _stage_contagion_radius(map_path: str, n_agents: int):
-    """Retorna CONTAGION_RADIUS_HIGH_N para stages com N>=12 e hazard >5%."""
     if n_agents < N_CONTAGION_THRESHOLD:
         return None
     try:
@@ -174,8 +139,6 @@ def build_renderer(env, title, fps=30, enabled=True, scale=1):
     r.initialize()
     r.enabled = enabled
     return r
-
-# ── Loop de episódio ──────────────────────────────────────────────────────────
 
 def run_episode(env, policy, renderer=None, train=True):
     obs_list = env.reset()
@@ -220,8 +183,6 @@ def run_episode(env, policy, renderer=None, train=True):
     metrics["total_reward"] = ep_reward
     return metrics
 
-# ── Treino de um stage ────────────────────────────────────────────────────────
-
 def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
                 stage_label=None, prev_renderer=None, prev_promoted=True, scale=1):
     name, map_path, n_agents, max_steps, stage_decay = CURRICULUM[stage_idx]
@@ -233,13 +194,7 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
     render_enabled = prev_renderer.enabled if prev_renderer is not None else True
     renderer = build_renderer(env, f"{label}: {name}", enabled=render_enabled, scale=scale) if render else None
 
-    # prev_promoted=True  → stage anterior foi promovido (normal ou early patience)
-    # prev_promoted=False → stage anterior esgotou a patience completa → reseta buffer
-    # Early patience retorna is_promoted=False mas sem necessidade de reset (buffer útil).
-    # A distinção é feita pelo parâmetro reset_buffer passado pelo chamador.
     if not prev_promoted:
-        # Buffer reset apenas quando patience COMPLETA foi esgotada.
-        # Early patience NÃO reseta — o buffer contém transições transferíveis.
         if hasattr(policy.buffer, "reset"):
             policy.buffer.reset()
         else:
@@ -310,11 +265,6 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
             policy.save(str(MODEL_DIR / f"ckpt_s{stage_idx+1}_ep{ep_global}.pth"))
             save_state(stage_idx, ep_global)
 
-        # Early patience: avança se avg30 baixo E epsilon já caiu o suficiente
-        # para que a política greedy tenha sido testada de verdade.
-        # Com epsilon > 0.20, o sinal de avg30 reflete exploração aleatória, não a policy.
-        # Sem o guard de epsilon, o early patience dispara cedo demais quando o
-        # epsilon_decay foi aumentado (ex: 45k→90k), avançando antes do agente aprender.
         early_patience_ok = (
             stage_ep >= EARLY_PATIENCE_AFTER
             and len(recent) >= EVAL_WINDOW
@@ -325,10 +275,7 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
             if verbose:
                 print(f"\n  [early patience: avg{EVAL_WINDOW}={sum(recent)/len(recent):.2f} "
                       f"eps={policy.current_epsilon():.3f} após {stage_ep} ep]")
-            # Early patience NÃO reseta o buffer — as transições de navegação
-            # deste stage são transferíveis para stages seguintes.
-            # O reset de buffer ocorre apenas na patience completa (prev_promoted=False).
-            promoted = None  # sinaliza "early" para o chamador
+            promoted = None
             break
 
         if (len(recent) >= EVAL_WINDOW
@@ -341,9 +288,6 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
     if renderer:
         renderer.close()
 
-    # promoted=True  → promovido normalmente
-    # promoted=None  → early patience (avança sem considerar promovido)
-    # promoted=False → patience completa esgotada
     is_promoted = promoted is True
     is_early    = promoted is None
 
@@ -361,8 +305,6 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
             print(f"\n  → Patience esgotada ({stage_ep} ep, avg={avg:.2f}). Avançando.")
 
     return ep_global, is_promoted, renderer
-
-# ── Fine-tuning ───────────────────────────────────────────────────────────────
 
 def fine_tune(policy, ep_global_start, render=False, verbose=True, scale=1):
     name, map_path, n_agents, max_steps, stage_decay = FINE_TUNE_MAP
@@ -412,11 +354,7 @@ def fine_tune(policy, ep_global_start, render=False, verbose=True, scale=1):
     policy.save(str(MODEL_PATH))
     return ep_global
 
-# ── Avaliação ─────────────────────────────────────────────────────────────────
-
 def evaluate(model_path, n_episodes=20, render=False, scale=1, seed=None):
-    # Coleta todos os resultados antes de imprimir a tabela — evita que os
-    # prints de carregamento (DQN, Renderer) apareçam no meio da tabela
     if seed is not None:
         import random as _random
         _random.seed(seed)
@@ -455,8 +393,6 @@ def evaluate(model_path, n_episodes=20, render=False, scale=1, seed=None):
         print(f"  {name:<23} {evac:>6.2f} {panic:>6.2f} {pk_em:>8.3f} "
               f"{haz:>7.2f} {rutil:>7.3f} {var:>7.4f} {time:>6.0f}")
     print()
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -500,7 +436,7 @@ def main():
 
     if not args.fine_tune:
         prev_renderer = None
-        prev_promoted = True  # True = não reseta buffer no próximo stage
+        prev_promoted = True
         for stage_idx in range(start, len(CURRICULUM)):
             ep_global, is_promoted, prev_renderer = train_stage(
                 stage_idx, policy, ep_global,
@@ -510,12 +446,7 @@ def main():
                 prev_promoted=prev_promoted,
                 scale=args.scale,
             )
-            # Early patience (is_promoted=False sem ter esgotado patience completa)
-            # passa prev_promoted=True para NÃO resetar o buffer no stage seguinte.
-            # Patience completa esgotada passa False para resetar.
-            # A distinção é feita dentro de train_stage via is_early vs is_promoted.
-            # Aqui simplificamos: o reset é controlado inteiramente por train_stage;
-            # prev_promoted=is_promoted propaga apenas a decisão de save_state.
+
             prev_promoted = is_promoted
 
     if args.fine_tune:

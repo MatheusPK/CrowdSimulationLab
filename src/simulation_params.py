@@ -1,17 +1,3 @@
-"""
-simulation_params.py — fonte única de todos os parâmetros de simulação.
-
-Grupos:
-  1. MUNDO       — tile size
-  2. AGENTE      — geometria, velocidade, avoidance
-  3. FSM/EMOÇÃO  — thresholds, deltas, parâmetros por estado
-  4. PERCEPÇÃO   — raios de visão e detecção
-  5. A*          — custo de hazard no planner
-  6. DQN         — arquitetura e hiperparâmetros
-  7. RECOMPENSA  — pesos de cada componente
-  8. CURRÍCULO   — promoção entre stages
-  9. PERFORMANCE — frequência de update
-"""
 
 # ══════════════════════════════════════════════════════════════════════
 # 1. MUNDO
@@ -28,16 +14,13 @@ PLANNER_RADIUS_MARGIN = 5.0   # px — margem extra do A* (planner_radius = 11px
 
 AGENT_BASE_SPEED      = 50.0  # px/s — velocidade no estado CALM
 
-OBSTACLE_AVOIDANCE_DISTANCE = 12.0  # px — início da repulsão de obstáculos (era 14px)
+OBSTACLE_AVOIDANCE_DISTANCE = 12.0  # px — início da repulsão de obstáculos
 OBSTACLE_AVOIDANCE_STRENGTH = 70.0  # magnitude da força repulsiva
 
 AGENT_AVOIDANCE_DISTANCE    = 12.0  # px — início da repulsão entre agentes
-AGENT_AVOIDANCE_STRENGTH    = 75.0  # magnitude (era 90px/s — reduzido para crowd mais natural)
+AGENT_AVOIDANCE_STRENGTH    = 75.0  # magnitude
 
 VELOCITY_SMOOTHING    = 0.25  # [0..1] — fração da velocidade target aplicada por step
-                               # Aumentado de 0.18 → 0.25: reduz steps com progress=0
-                               # de ~4 para ~2 por célula BFS, diminuindo o custo
-                               # colateral do NO_PROGRESS=-1.0 em movimento legítimo
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. FSM / EMOÇÃO
@@ -72,7 +55,7 @@ FSM_CALM_OBS_DIST   = 16.0
 FSM_CALM_OBS_STR    = 80.0
 FSM_CALM_AGENT_DIST = 14.0
 FSM_CALM_AGENT_STR  = 95.0
-FSM_CALM_VEL_SMOOTH = 0.25  # alinhado com VELOCITY_SMOOTHING base
+FSM_CALM_VEL_SMOOTH = 0.25
 
 # Avoidance — EVACUATE
 FSM_EVAC_OBS_DIST   = 12.0
@@ -149,14 +132,6 @@ REWARD_HAZARD_PANIC       =  -0.5   # por step em pânico perto do hazard
 REWARD_COLLISION          =  -0.3   # por colisão
 REWARD_DENSITY_SCALE      =  -0.1   # × densidade normalizada
 
-# Gradiente de atração nos últimos tiles antes do exit.
-# Resolve oscilação ("spinning") quando o agente está perto da saída com hazard visível:
-# o sinal de progresso (15 × 8px / 702px ≈ 0.17) compete com HAZARD_VISIBLE_CALM (≈0.07)
-# na mesma ordem de grandeza. Este reward domina ambos perto do exit.
-# R += SCALE × (1 - dist_bfs / THRESHOLD)  se dist_bfs < THRESHOLD
-REWARD_EXIT_PROXIMITY_SCALE     = 2.0          # recompensa máxima (a 0px do exit)
-REWARD_EXIT_PROXIMITY_THRESHOLD = 3 * TILE_SIZE  # 24px = 3 tiles
-
 # ══════════════════════════════════════════════════════════════════════
 # 8. CURRÍCULO
 # ══════════════════════════════════════════════════════════════════════
@@ -174,5 +149,5 @@ CURRICULUM_EARLY_PATIENCE_THRESHOLD = 0.15
 # 9. PERFORMANCE
 # ══════════════════════════════════════════════════════════════════════
 
-# 1 gradient step a cada UPDATE_EVERY transições (ratio 4:1 — padrão DQN original)
+# 1 gradient step a cada UPDATE_EVERY transições
 DQN_UPDATE_EVERY = 4

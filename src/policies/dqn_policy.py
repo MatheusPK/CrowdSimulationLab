@@ -30,21 +30,6 @@ class DQNNetwork(nn.Module):
         return self.net(x)
 
 class PrioritizedReplayBuffer:
-    """
-    Replay buffer com amostragem por prioridade.
-
-    Por que PER para este projeto:
-      O problema central identificado nos logs de treino e sinal esparso:
-      transicoes com evacuacao bem-sucedida (+80 reward) sao raras mas muito
-      informativas, e se perdem num buffer de 100k dominado por transicoes de
-      panico coletivo. PER da prioridade a transicoes com TD-error alto,
-      exatamente as evacuacoes bem-sucedidas e primeiros contatos com hazard.
-
-    Implementacao via SumTree: arvore binaria onde cada folha armazena a
-    prioridade de uma transicao e cada no interno armazena a soma dos filhos.
-    Permite amostragem proporcional a prioridade em O(log n).
-    """
-
     def __init__(self, capacity: int, alpha: float = 0.6):
         self.capacity      = capacity
         self.alpha         = alpha
@@ -76,8 +61,6 @@ class PrioritizedReplayBuffer:
     def push(self, state, action, reward, next_state, done):
         leaf     = self.ptr + self.capacity - 1
         self.data[self.ptr] = (state, action, reward, next_state, done)
-        # _max_priority is already alpha-scaled (stored as (td+eps)^alpha in
-        # update_priorities). Applying ** alpha again would double-scale.
         priority = self._max_priority
         delta    = priority - self.tree[leaf]
         self.tree[leaf] = priority
@@ -135,7 +118,7 @@ class PrioritizedReplayBuffer:
 class DQNPolicy:
     """
     Deep Q-Network com:
-    - Prioritized Experience Replay (PER) - Schaul et al. 2015
+    - Prioritized Experience Replay (PER)
     - Target network com atualizacao periodica
     - Epsilon-greedy com decaimento linear calibrado por stage
     - Modos TRAIN e EVAL separados
@@ -178,7 +161,7 @@ class DQNPolicy:
         self.per_beta_start     = per_beta_start
         self.per_beta_frames    = per_beta_frames
         self.update_every       = update_every
-        self._transition_count  = 0   # conta transições desde o último update
+        self._transition_count  = 0
 
         if device is not None:
             self.device = torch.device(device)
@@ -202,6 +185,11 @@ class DQNPolicy:
         if os.path.exists(model_path):
             self._load(model_path)
             print(f"[DQN] Modelo carregado de {model_path}")
+        elif self.mode == DQNMode.EVAL:
+            raise FileNotFoundError(
+                f"Modelo não encontrado: {model_path}\n"
+                f"Verifique o caminho em config.py ou rode train_curriculum.py primeiro."
+            )
 
         if self.mode == DQNMode.EVAL:
             self.policy_net.eval()
@@ -230,10 +218,6 @@ class DQNPolicy:
             return
         self.buffer.push(obs, action, reward, next_obs, done)
         if len(self.buffer) >= self.train_start_size:
-            # _global_transitions controla o decaimento do beta do PER.
-            # Só incrementa quando o treino está de fato ativo, evitando
-            # que os primeiros train_start_size passos (warm-up) avancem
-            # o beta antes de qualquer gradient step acontecer.
             self._global_transitions += 1
             self._transition_count += 1
             if self._transition_count % self.update_every == 0:

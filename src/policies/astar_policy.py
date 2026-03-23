@@ -37,9 +37,6 @@ class AStarPolicy:
         return self.planner_cache[key]
 
     def _is_stuck(self, cached, start_cell):
-        """
-        Detecta se o agente está preso: não mudou de célula por _STUCK_THRESHOLD steps.
-        """
         if cached is None:
             return False
 
@@ -52,10 +49,6 @@ class AStarPolicy:
         return cached["stuck_count"] >= _STUCK_THRESHOLD
 
     def _find_closest_path_index(self, path, start_cell):
-        """
-        Encontra o índice do ponto no path mais próximo da célula atual do agente
-        usando distância de Manhattan.
-        """
         best_idx = 0
         best_dist = float("inf")
         for i, cell in enumerate(path):
@@ -68,20 +61,13 @@ class AStarPolicy:
     def choose_action(self, env, agent, exit_obj):
         if agent.evacuated:
             return None
-
-        # O A* sempre usa o exit com caminho mais seguro (penalizando hazard),
-        # independente do exit_obj passado pelo main.py (que usa euclidiana).
-        # Isso garante que em mapas com hazard bloqueando uma saída (mall_panic,
-        # di_emergency) o A* roteia pelo exit acessível, não pelo mais próximo.
+        
         if len(env.map_data.exits) > 1:
             exit_obj = env.get_nearest_exit_bfs(agent, use_safe_map=True)
 
         planner = self._get_planner(env, agent)
 
         start_cell = env.world_to_cell(agent.x, agent.y)
-
-        # goal_cell ainda é calculado para compatibilidade com o cache key,
-        # mas o A* vai usar exit_obj para determinar a approach cell real.
         exit_cx = exit_obj.x + exit_obj.width / 2.0
         exit_cy = exit_obj.y + exit_obj.height / 2.0
         goal_cell = env.world_to_cell(exit_cx, exit_cy)
@@ -98,9 +84,6 @@ class AStarPolicy:
         )
 
         if need_replan:
-            # FIX: passa exit_obj para que o A* use get_exit_approach_cell
-            # em vez de find_nearest_valid_goal, garantindo que o goal
-            # calculado realmente permite ao agente tocar o tile de saída.
             path = planner.find_path(start_cell, goal_cell, exit_obj=exit_obj)
 
             if not path or len(path) < 2:
@@ -116,10 +99,8 @@ class AStarPolicy:
 
         path = cached["path"]
 
-        # Encontra onde o agente está no path por proximidade
         closest_idx = self._find_closest_path_index(path, start_cell)
 
-        # Pega o próximo waypoint à frente
         next_idx = min(closest_idx + 1, len(path) - 1)
 
         if next_idx == closest_idx:

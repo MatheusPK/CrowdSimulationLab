@@ -17,7 +17,6 @@ class AStarPlanner:
             for r in range(self.rows)
         ]
 
-        # Cache de "célula de approach" por exit tile — calculado uma vez por planner
         self._approach_cache: dict[tuple, tuple | None] = {}
 
     # ------------------------------------------------------------------
@@ -91,18 +90,6 @@ class AStarPlanner:
         return (dx + dy) + (math.sqrt(2) - 2) * min(dx, dy)
 
     def get_neighbors(self, row, col):
-        """
-        Retorna vizinhos navegáveis de (row, col) com seus custos de movimento.
-
-        Duas garantias de consistência física:
-          1. Clearance: cada vizinho é verificado via has_clearance (baseado no
-             agent_radius do planner, incluindo margem de segurança).
-          2. Anti corner-cutting diagonal: um movimento diagonal (dr≠0, dc≠0)
-             só é permitido se ambas as células ortogonais intermediárias
-             (row+dr, col) e (row, col+dc) também tiverem clearance.
-             Isso impede que o agente "corte" a quina entre dois obstáculos
-             adjacentes — fisicamente impossível para um agente com raio > 0.
-        """
         directions = [
             (-1,  0, 1.0),
             (-1,  1, math.sqrt(2)),
@@ -136,41 +123,24 @@ class AStarPlanner:
         path.reverse()
         return path
 
-    # ------------------------------------------------------------------
-    # FIX PRINCIPAL: approach cell por exit tile
-    # ------------------------------------------------------------------
-
     def get_exit_approach_cell(self, exit_obj) -> tuple | None:
-        """
-        Retorna a célula livre mais próxima do exit_obj que efetivamente
-        permite ao agente tocar o tile de saída (usando agent_radius do agente
-        físico, não do planner — aqui usamos uma margem conservadora).
-
-        Essa célula é usada como goal do A* em vez do centro do exit tile,
-        garantindo que o agente realmente evacua ao chegá-la.
-
-        O resultado é cacheado por (exit_obj.x, exit_obj.y).
-        """
         key = (exit_obj.x, exit_obj.y)
         if key in self._approach_cache:
             return self._approach_cache[key]
 
         tile = self.map_data.tile_size
 
-        # Células que formam o exit (pode ter vários tiles E consecutivos)
         exit_cells = []
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.map_data.grid[r][c] == "E":
                     cx = c * tile + tile / 2.0
                     cy = r * tile + tile / 2.0
-                    # Pertence a este exit_obj?
+
                     if (exit_obj.x <= cx <= exit_obj.x + exit_obj.width and
                             exit_obj.y <= cy <= exit_obj.y + exit_obj.height):
                         exit_cells.append((r, c))
 
-        # Raio físico do agente — importado de simulation_params para manter consistência.
-        # Se AGENT_RADIUS mudar, get_exit_approach_cell acompanha automaticamente.
         AGENT_PHYSICAL_RADIUS = _AGENT_PHYSICAL_RADIUS
         best_cell = None
         best_dist = float("inf")
@@ -184,7 +154,7 @@ class AStarPlanner:
                         nr, nc = er + dr, ec + dc
                         if not self.has_clearance(nr, nc):
                             continue
-                        # Verifica que o centro desta célula toca o exit_obj
+
                         cx, cy = self.cell_center_to_world(nr, nc)
                         if self.circle_intersects_rect(
                             cx, cy, AGENT_PHYSICAL_RADIUS, exit_obj
@@ -194,8 +164,7 @@ class AStarPlanner:
                                 best_dist = h
                                 best_cell = (nr, nc)
                 if best_cell is not None:
-                    break  # encontrou na menor distância possível para este exit tile
-            # Não break aqui — pode haver exit tile mais próximo em outro tile E
+                    break
 
         self._approach_cache[key] = best_cell
         return best_cell
@@ -205,11 +174,6 @@ class AStarPlanner:
     # ------------------------------------------------------------------
 
     def find_nearest_valid_goal(self, goal_cell):
-        """
-        Fallback legado: usado apenas para o start_cell quando o agente
-        é empurrado para fora de uma célula válida.
-        NÃO use para exits — use get_exit_approach_cell.
-        """
         if self.has_clearance(*goal_cell):
             return goal_cell
 
@@ -236,15 +200,6 @@ class AStarPlanner:
     # ------------------------------------------------------------------
 
     def find_path(self, start_cell, goal_cell, exit_obj=None):
-        """
-        Planeja caminho de start_cell até goal_cell.
-
-        Se exit_obj for fornecido, usa get_exit_approach_cell para garantir
-        que o goal permite ao agente físico tocar o tile de saída.
-        Se exit_obj não for fornecido, usa o comportamento legado
-        (find_nearest_valid_goal).
-        """
-        # Resolve o goal real
         if exit_obj is not None:
             adjusted_goal = self.get_exit_approach_cell(exit_obj)
         else:
@@ -254,14 +209,12 @@ class AStarPlanner:
             return []
         goal_cell = adjusted_goal
 
-        # Resolve start
         if not self.has_clearance(*start_cell):
             adjusted_start = self.find_nearest_valid_goal(start_cell)
             if adjusted_start is None:
                 return []
             start_cell = adjusted_start
 
-        # A* padrão
         open_heap = []
         heapq.heappush(open_heap, (0.0, start_cell))
 

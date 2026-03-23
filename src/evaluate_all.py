@@ -9,7 +9,7 @@ Uso:
     python evaluate_all.py --policies dqn astar   # só algumas políticas
     python evaluate_all.py --csv results.csv      # salva CSV
 
-Políticas disponíveis: random, astar, astar_fsm, dqn
+Políticas disponíveis: astar, astar_fsm, dqn
 """
 
 import argparse
@@ -20,38 +20,36 @@ from pathlib import Path
 
 # ── Mapas de eval ─────────────────────────────────────────────────────────────
 
-# EVAL_MAPS = [
-#     ("library_bottleneck", "maps/eval/library_bottleneck.txt", 12, 450),
-#     ("office_single_exit", "maps/eval/office_single_exit.txt", 12, 450),
-#     ("mall_panic",         "maps/eval/mall_panic.txt",         12, 450),
-#     ("school_evacuation",  "maps/eval/school_evacuation.txt",  12, 450),
-#     ("di_emergency",       "maps/eval/di_emergency.txt",       12, 500),
-# ]
-
 EVAL_MAPS = [
-    ("mall_small",              "maps/train/mall_small.txt",              4,  300),
-    ("school_small",            "maps/train/school_small.txt",            4,  300),
-    ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300),
-    ("library_small",           "maps/train/library_small.txt",           4,  300),
-    ("library_medium",          "maps/train/library_medium.txt",          6,  400),
-    ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350),
-    ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350),
-    ("school_floor",            "maps/train/school_floor.txt",            8,  400),
-    ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400),
-    ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420),
-    ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400),
-    ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400),
-    ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420),
-    ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420),
-    ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450),
-    ("mall_medium",             "maps/train/mall_medium.txt",            12,  450),
-    ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450),
-    ("library_hard",            "maps/train/library_hard.txt",           12,  450),
+    ("library_bottleneck", "maps/eval/library_bottleneck.txt", 12, 450),
+    ("office_single_exit", "maps/eval/office_single_exit.txt", 12, 450),
+    ("mall_panic",         "maps/eval/mall_panic.txt",         12, 450),
+    ("school_evacuation",  "maps/eval/school_evacuation.txt",  12, 450),
+    ("di_emergency",       "maps/eval/di_emergency.txt",       12, 500),
 ]
 
-DQN_MODEL = "models/dqn_fsm.pth"
+# EVAL_MAPS = [
+#     ("mall_small",              "maps/train/mall_small.txt",              4,  300),
+#     ("school_small",            "maps/train/school_small.txt",            4,  300),
+#     ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300),
+#     ("library_small",           "maps/train/library_small.txt",           4,  300),
+#     ("library_medium",          "maps/train/library_medium.txt",          6,  400),
+#     ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350),
+#     ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350),
+#     ("school_floor",            "maps/train/school_floor.txt",            8,  400),
+#     ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400),
+#     ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420),
+#     ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400),
+#     ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400),
+#     ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420),
+#     ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420),
+#     ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450),
+#     ("mall_medium",             "maps/train/mall_medium.txt",            12,  450),
+#     ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450),
+#     ("library_hard",            "maps/train/library_hard.txt",           12,  450),
+# ]
 
-# ── Imports do projeto ────────────────────────────────────────────────────────
+DQN_MODEL = "models/dqn_fsm.pth"
 
 from core.dqn_mode import DQNMode
 from environment.environment import Environment
@@ -85,8 +83,6 @@ DQN_CFG = dict(
     per_beta_frames=PER_BETA_FRAMES,
 )
 
-# ── Builders ──────────────────────────────────────────────────────────────────
-
 def build_env(map_path, n_agents, max_steps, use_fsm):
     return Environment(
         map_data=load_map(map_path), dt=0.1,
@@ -108,7 +104,6 @@ def build_policy(policy_name, env):
     raise ValueError(f"Política desconhecida: {policy_name}")
 
 def policy_uses_fsm(policy_name):
-    # astar_fsm e dqn usam FSM; astar puro e random não
     return policy_name in ("astar_fsm", "dqn")
 
 def build_renderer(env, title, scale, render):
@@ -121,8 +116,6 @@ def build_renderer(env, title, scale, render):
     )
     r.initialize()
     return r
-
-# ── Episódio ──────────────────────────────────────────────────────────────────
 
 def run_episode(env, policy, renderer=None):
     obs_list = env.reset()
@@ -147,8 +140,6 @@ def run_episode(env, policy, renderer=None):
             renderer.render(env)
 
     return env.get_episode_metrics()
-
-# ── Avaliação de uma política num mapa ───────────────────────────────────────
 
 def evaluate_policy_on_map(policy_name, map_name, map_path, n_agents,
                             max_steps, n_episodes, render, scale):
@@ -178,8 +169,6 @@ def evaluate_policy_on_map(policy_name, map_name, map_path, n_agents,
         "exit_utilization":    sum(r.get("exit_utilization", 0)       for r in results) / N,
     }
 
-# ── Impressão da tabela ───────────────────────────────────────────────────────
-
 POLICY_LABELS = {
     "astar":    "A*",
     "astar_fsm": "A*+FSM",
@@ -197,7 +186,6 @@ METRICS = [
 ]
 
 def print_results(all_results, policies):
-    """Imprime tabela comparativa por mapa."""
     map_names = list(dict.fromkeys(r["map"] for r in all_results))
 
     for map_name in map_names:
@@ -205,7 +193,6 @@ def print_results(all_results, policies):
         print(f"  {map_name}")
         print(f"{'='*70}")
 
-        # Cabeçalho
         header = f"  {'Política':<12}"
         for _, col_label, width, _ in METRICS:
             header += f"  {col_label:>{width}}"
@@ -227,7 +214,6 @@ def print_results(all_results, policies):
             print(row)
 
 def print_summary(all_results, policies):
-    """Imprime médias por política (resumo geral)."""
     print(f"\n{'='*70}")
     print("  RESUMO — médias sobre todos os mapas")
     print(f"{'='*70}")
@@ -249,8 +235,6 @@ def print_summary(all_results, policies):
             row += f"  {avg:{width}{fmt}}"
         print(row)
 
-# ── Exportação CSV ────────────────────────────────────────────────────────────
-
 def save_csv(all_results, path):
     keys = ["policy", "map"] + [k for k, *_ in METRICS]
     with open(path, "w", newline="") as f:
@@ -258,8 +242,6 @@ def save_csv(all_results, path):
         w.writeheader()
         w.writerows(all_results)
     print(f"\nResultados salvos em: {path}")
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     global DQN_MODEL

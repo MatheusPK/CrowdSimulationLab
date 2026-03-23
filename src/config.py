@@ -1,8 +1,6 @@
 """
 config.py — configuração da simulação para main.py.
 
-Edite as três linhas marcadas com <-- e execute: python main.py
-
 Cenários disponíveis:
     AppScenario.RANDOM      baseline aleatório, sem FSM
     AppScenario.ASTAR       A* puro,            sem FSM
@@ -18,8 +16,6 @@ from simulation_params import (
     DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR, DQN_TARGET_UPDATE_FREQ,
     DQN_EPSILON_START, DQN_EPSILON_END, DQN_EPSILON_DECAY,
 )
-
-# ── Mapas de treino ───────────────────────────────────────────────────────────
 
 TRAIN_MAPS = {
     "mall_small":              "maps/train/mall_small.txt",
@@ -43,8 +39,6 @@ TRAIN_MAPS = {
     "di_style":                "maps/train/di_style.txt",
 }
 
-# ── Mapas de avaliação ────────────────────────────────────────────────────────
-
 EVAL_MAPS = {
     "library_bottleneck": "maps/eval/library_bottleneck.txt",
     "office_single_exit": "maps/eval/office_single_exit.txt",
@@ -59,11 +53,9 @@ ALL_MAPS = {
     "di_primeiro_andar": "maps/DI_primeiro_andar.txt",
 }
 
-# ── Configuração do experimento ───────────────────────────────────────────────
-
-SCENARIO = AppScenario.ASTAR_FSM          # <-- cenário
-MAP      = EVAL_MAPS["library_bottleneck"]         # <-- mapa
-AGENTS   = 12                              # <-- número de agentes
+SCENARIO = AppScenario.DQN_FSM
+MAP      = EVAL_MAPS["library_bottleneck"]
+AGENTS   = 12 
 
 RENDER        = True
 FPS           = 30
@@ -71,11 +63,9 @@ DT            = 0.1
 MAX_STEPS     = 450
 EVAL_EPISODES = 10
 
-# ── DQN ──────────────────────────────────────────────────────────────────────
-
 DQN = {
     "mode":               DQNMode.EVAL,
-    "model_path":         "models/dqn_fsm.pth",
+    "model_path":         "model_candidate_4_goodAtAllStages20withBFSDistance/dqn_fsm.pth",
     "episodes":           500,
     "hidden_dim":         DQN_HIDDEN_DIM,
     "batch_size":         DQN_BATCH_SIZE,
