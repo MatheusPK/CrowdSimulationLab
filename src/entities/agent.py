@@ -40,6 +40,7 @@ class Agent:
         self.evacuation_time = None
         self.touched_hazard  = False 
         self.exit_used       = None
+        self.stagnation_steps = 0
 
         # Avoidance base
         self.obstacle_avoidance_distance = OBSTACLE_AVOIDANCE_DISTANCE

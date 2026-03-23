@@ -27,6 +27,8 @@ from simulation_params import (
     REWARD_PROGRESS_SCALE, REWARD_EVACUATED, REWARD_TIME_PENALTY,
     REWARD_NO_PROGRESS, REWARD_HAZARD_CONTACT, REWARD_HAZARD_VISIBLE_CALM,
     REWARD_HAZARD_PANIC, REWARD_COLLISION, REWARD_DENSITY_SCALE,
+    REWARD_STAGNATION,
+    STAGNATION_THRESHOLD
 )
 
 
@@ -811,18 +813,24 @@ class Environment:
     # ------------------------------------------------------------------
 
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:
-        max_dist = math.hypot(self.map_data.width, self.map_data.height)
-
         reward = REWARD_TIME_PENALTY
 
-        progress = (prev_dist - new_dist) / max(1.0, max_dist)
-        reward += REWARD_PROGRESS_SCALE * progress
+        # progresso em unidades do mapa, sem diluir demais pelo tamanho total
+        progress = prev_dist - new_dist
 
         if agent.evacuated:
             reward += REWARD_EVACUATED
+            return reward
 
-        if progress <= 0 and not agent.evacuated:
+        if progress > 0:
+            reward += REWARD_PROGRESS_SCALE * progress
+            agent.stagnation_steps = 0
+        else:
             reward += REWARD_NO_PROGRESS
+            agent.stagnation_steps = agent.stagnation_steps + 1
+
+        if agent.stagnation_steps >= STAGNATION_THRESHOLD:
+            reward += REWARD_STAGNATION
 
         if self.touches_hazard(agent):
             reward += REWARD_HAZARD_CONTACT

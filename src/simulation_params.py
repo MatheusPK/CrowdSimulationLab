@@ -120,11 +120,11 @@ PER_BETA_FRAMES = 3_000_000  # transições para beta chegar a 1.0
 #   + COLLISION                        (por colisão)
 #   + DENSITY_SCALE × densidade_norm
 
-REWARD_PROGRESS_SCALE     =  15.0   # peso do progresso BFS em direção à saída
-REWARD_EVACUATED          =  80.0   # recompensa terminal por evacuação
+REWARD_PROGRESS_SCALE     =  25.0   # peso do progresso BFS em direção à saída
+REWARD_EVACUATED          =  100.0   # recompensa terminal por evacuação
 REWARD_TIME_PENALTY       =  -0.05  # por step
-REWARD_NO_PROGRESS        =  -1.0   # se progress <= 0 (inclui zero — urgência para mover)
-REWARD_STAGNATION         =  -0.2   # se estagnado >= STAGNATION_THRESHOLD steps consecutivos
+REWARD_NO_PROGRESS        =  -5.0   # se progress <= 0 (inclui zero — urgência para mover)
+REWARD_STAGNATION         =  -3.0   # se estagnado >= STAGNATION_THRESHOLD steps consecutivos
 STAGNATION_THRESHOLD      =  8      # steps sem progresso antes de penalizar (2× o tempo legítimo ~4 steps)
 REWARD_HAZARD_CONTACT     =  -3.0   # por step dentro do hazard
 REWARD_HAZARD_VISIBLE_CALM =  0.10  # bônus × (1 - emotion) ao ver hazard sem contato
@@ -136,13 +136,13 @@ REWARD_DENSITY_SCALE      =  -0.1   # × densidade normalizada
 # 8. CURRÍCULO
 # ══════════════════════════════════════════════════════════════════════
 
-CURRICULUM_PROMOTION_THRESHOLD = 0.80  # evacuation_rate média para promover
+CURRICULUM_PROMOTION_THRESHOLD = 0.9  # evacuation_rate média para promover
 CURRICULUM_EVAL_WINDOW         = 30    # janela de episódios para a média
 CURRICULUM_PATIENCE            = 500   # máx de episódios por stage
 CURRICULUM_SAVE_EVERY          = 50    # salva checkpoint a cada N episódios
 
 # Early patience: avança e reseta buffer se avg30 < THRESHOLD após AFTER episódios
-CURRICULUM_EARLY_PATIENCE_AFTER     = 200
+CURRICULUM_EARLY_PATIENCE_AFTER     = 250
 CURRICULUM_EARLY_PATIENCE_THRESHOLD = 0.15
 
 # ══════════════════════════════════════════════════════════════════════
