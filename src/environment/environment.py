@@ -429,15 +429,18 @@ class Environment:
         ny = -u_y / u_len
 
         # Responsabilidade adaptativa:
-        # Se o outro agente está parado (velocidade baixa), ele não vai desviar.
-        # Reduzimos a responsabilidade do outro de 50% → 10%, fazendo o agente
-        # atual assumir mais da evasão. Evita deadlock quando vizinho está
-        # estático (esperando, stuck, início de episódio com epsilon alto).
+        # Se o outro agente está parado, assume mais da evasão.
+        # Perturbação assimétrica baseada na posição relativa para quebrar
+        # órbitas simétricas (dois agentes rodando um ao redor do outro).
         o_speed = math.hypot(ovx, ovy)
-        if o_speed < 5.0:  # px/s — considerado "parado"
-            responsibility = 0.9  # agente assume 90% da evasão
+        if o_speed < 5.0:
+            responsibility = 0.9  # vizinho parado — assume quase tudo
         else:
-            responsibility = 0.5  # divisão normal 50/50
+            # Pequena assimetria baseada na posição: agentes à esquerda
+            # assumem ligeiramente mais responsabilidade que os à direita.
+            # Quebra a simetria 50/50 sem alterar o comportamento global.
+            asymmetry = 0.05 * (1.0 if (px + py) > (ox + oy) else -1.0)
+            responsibility = 0.5 + asymmetry
 
         b = (vx + responsibility*u_x)*nx + (vy + responsibility*u_y)*ny
         return nx, ny, b
@@ -617,8 +620,29 @@ class Environment:
             cx = agent.x + step_dx
             cy = agent.y + step_dy
             if not self.check_collision_static(cx, cy, agent.radius):
+                # Move normalmente — mas verifica se ficou muito próximo de parede.
+                # Se sim, corrige a posição para manter margem mínima de clearance.
+                # Isso previne o corner antes de acontecer, sem restringir corredores.
                 agent.apply_position(cx, cy)
                 moved_any = True
+                if self.check_collision_with_margin(cx, cy, agent.radius, margin=1.5):
+                    # Aplica push-out leve para sair da zona de risco
+                    px, py = 0.0, 0.0
+                    for obs in self.map_data.obstacles:
+                        ocx = max(obs.x, min(cx, obs.x + obs.width))
+                        ocy = max(obs.y, min(cy, obs.y + obs.height))
+                        odx = cx - ocx
+                        ody = cy - ocy
+                        odist = math.hypot(odx, ody)
+                        if 0 < odist < agent.radius + 1.5:
+                            overlap = (agent.radius + 1.5) - odist
+                            px += (odx / odist) * overlap * 0.5
+                            py += (ody / odist) * overlap * 0.5
+                    if math.hypot(px, py) > 0.1:
+                        nx = cx + px
+                        ny = cy + py
+                        if not self.check_collision_static(nx, ny, agent.radius):
+                            agent.apply_position(nx, ny)
                 continue
 
             collided = True
@@ -637,23 +661,61 @@ class Environment:
                 moved_this = True
 
             if not moved_this:
-                # Corner: tenta deslizar ao longo da diagonal oposta
-                # (passo pequeno de 1px nas 4 direções cardinais)
-                freed = False
-                tile = self.map_data.tile_size
-                nudge = max(1.0, tile * 0.15)
-                for ndx, ndy in [(nudge,0),(-nudge,0),(0,nudge),(0,-nudge)]:
-                    tx = agent.x + ndx
-                    ty = agent.y + ndy
+                # Corner — escape geométrico em duas fases:
+                #
+                # Fase 1: calcula vetor de penetração somando contribuições
+                # de todas as paredes próximas e empurra o agente para fora.
+                # Isso resolve o caso onde o agente está a <1px de dois
+                # obstáculos simultaneamente (canto interno).
+                #
+                # Fase 2: se ainda preso, tenta 8 direções com passo crescente.
+
+                # ── Fase 1: push-out geométrico ───────────────────────
+                push_x, push_y = 0.0, 0.0
+                for obs in self.map_data.obstacles:
+                    ocx = max(obs.x, min(agent.x, obs.x + obs.width))
+                    ocy = max(obs.y, min(agent.y, obs.y + obs.height))
+                    odx = agent.x - ocx
+                    ody = agent.y - ocy
+                    odist = math.hypot(odx, ody)
+                    if 0 < odist < agent.radius + 2.0:
+                        # Contribuição proporcional à penetração
+                        overlap = (agent.radius + 2.0) - odist
+                        push_x += (odx / odist) * overlap
+                        push_y += (ody / odist) * overlap
+
+                pushed = False
+                if math.hypot(push_x, push_y) > 1e-6:
+                    tx = agent.x + push_x
+                    ty = agent.y + push_y
                     if not self.check_collision_static(tx, ty, agent.radius):
                         agent.apply_position(tx, ty)
                         agent.vx = 0.0
                         agent.vy = 0.0
-                        freed = True
-                        break
-                if not freed:
-                    agent.vx = 0.0
-                    agent.vy = 0.0
+                        pushed = True
+
+                if not pushed:
+                    # ── Fase 2: 8 direções com passo crescente ─────────
+                    freed = False
+                    tile = self.map_data.tile_size
+                    dirs8 = [(1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,-1)]
+                    for scale in [0.3, 0.6, 1.0]:
+                        nudge = max(1.0, tile * scale)
+                        for ndx, ndy in dirs8:
+                            mag = math.hypot(ndx, ndy)
+                            tx = agent.x + (ndx / mag) * nudge
+                            ty = agent.y + (ndy / mag) * nudge
+                            if not self.check_collision_static(tx, ty, agent.radius):
+                                agent.apply_position(tx, ty)
+                                agent.vx = 0.0
+                                agent.vy = 0.0
+                                freed = True
+                                break
+                        if freed:
+                            break
+                    if not freed:
+                        agent.vx = 0.0
+                        agent.vy = 0.0
                 break
 
         if not moved_any:
@@ -712,7 +774,11 @@ class Environment:
     # Colisões e detecções
     # ------------------------------------------------------------------
 
+    # Margem de clearance física — agentes mantêm distância mínima das paredes.
+    # Previne o corner problem antes de acontecer, em vez de corrigir depois.
+    # Consistente com o clearance do dist_map (BFS prefere centro de corredores).
     def check_collision_static(self, x, y, radius):
+        """Colisão física real — usa radius exato do agente."""
         if x - radius < 0 or x + radius > self.map_data.width:
             return True
         if y - radius < 0 or y + radius > self.map_data.height:
@@ -721,6 +787,11 @@ class Environment:
             if self.circle_intersects_rect(x, y, radius, obstacle):
                 return True
         return False
+
+    def check_collision_with_margin(self, x, y, radius, margin=1.5):
+        """Colisão com margem de clearance — usado só no corner escape
+        para detectar proximidade excessiva antes de travar."""
+        return self.check_collision_static(x, y, radius + margin)
 
     def check_collision(self, x, y, radius, ignore_agent=None):
         if self.check_collision_static(x, y, radius):
