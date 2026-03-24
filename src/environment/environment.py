@@ -748,7 +748,7 @@ class Environment:
         # Atualiza histórico de posições para detecção de stagnation
         if not agent.evacuated:
             agent._pos_history.append((agent.x, agent.y))
-            if len(agent._pos_history) > 12:   # janela de 12 steps (~1.2s)
+            if len(agent._pos_history) > 20:   # janela de 20 steps (~2s)
                 agent._pos_history.pop(0)
 
         if self.touches_hazard(agent):
@@ -1148,35 +1148,37 @@ class Environment:
     def _detect_stagnation(self, agent) -> str | None:
         """
         Detecta padrão de movimento patológico a partir do histórico de posições.
-        Retorna:
-          'stuck'     — agente quase imóvel (variância < 4px²)
-          'oscillate' — agente indo e voltando (desvio > 3px mas deslocamento líquido < 2px)
-          None        — movimento normal
-        Só dispara com histórico completo (12 steps).
+
+        Critérios calibrados para não penalizar navegação legítima em corredores:
+          'stuck'     — agente não se moveu mais que 1px em 20 steps (quase imóvel)
+          'oscillate' — percorreu >16px mas deslocamento líquido <2px (loop claro)
+          None        — movimento normal (inclui navegação lenta em corredor)
+
+        Janela aumentada para 20 steps para distinguir parada real de desaceleração.
         """
         hist = getattr(agent, '_pos_history', [])
-        if len(hist) < 12:
+        if len(hist) < 20:
             return None
 
         xs = [p[0] for p in hist]
         ys = [p[1] for p in hist]
 
-        # Variância total de posição
-        mx = sum(xs) / len(xs)
-        my = sum(ys) / len(ys)
-        var = sum((x-mx)**2 + (y-my)**2 for x, y in hist) / len(hist)
-
-        # Deslocamento líquido (start → end)
+        # Deslocamento líquido (start → end da janela)
         net_dist = math.hypot(xs[-1] - xs[0], ys[-1] - ys[0])
 
-        # Deslocamento total percorrido (soma de todos os passos)
+        # Deslocamento total percorrido
         total_dist = sum(math.hypot(xs[i]-xs[i-1], ys[i]-ys[i-1])
                          for i in range(1, len(hist)))
 
-        if var < 4.0:
-            return 'stuck'       # praticamente parado
-        if total_dist > 8.0 and net_dist < 2.0:
-            return 'oscillate'   # moveu bastante mas voltou ao mesmo lugar
+        # Stuck: total percorrido < 1px em 20 steps — genuinamente parado
+        if total_dist < 1.0:
+            return 'stuck'
+
+        # Oscillate: percorreu bastante mas voltou ao mesmo lugar
+        # threshold alto (16px) para não penalizar curvas em corredores
+        if total_dist > 16.0 and net_dist < 2.0:
+            return 'oscillate'
+
         return None
 
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:

@@ -68,7 +68,7 @@ class Renderer:
         self.sim_width  = int(width)
         self.sim_height = int(height)
         self.title      = title
-        self.fps        = fps
+        self.fps        = 60
         self.draw_grid  = draw_grid
         self.tile_size  = tile_size
         self.scale      = max(1, int(scale))

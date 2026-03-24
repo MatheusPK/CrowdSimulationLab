@@ -114,13 +114,13 @@ PER_BETA_FRAMES = 3_000_000
 #   + HAZARD_PANIC                               (se emotion > 0.5 perto do hazard)
 #   + DENSITY_SCALE × densidade_norm
 
-REWARD_PROGRESS_SCALE      =  50.0   # era 40 — sinal denso mais dominante
+REWARD_PROGRESS_SCALE      =  60.0   # era 40 — sinal denso mais dominante
 REWARD_EVACUATED           =  80.0
 REWARD_TIME_PENALTY        =  -0.05
 REWARD_NO_PROGRESS         =  -1.5   # suave — ORCA pode parar brevemente para desviar
 REWARD_HAZARD_CONTACT      =  -3.0
 REWARD_HAZARD_VISIBLE_CALM =   0.10
-REWARD_HAZARD_PANIC        =  -0.5
+REWARD_HAZARD_PANIC        =  -0.1   # era -0.5 — reduzido para não sobrescrever BFS em pânico
 REWARD_COLLISION           =   0.0   # não usado — ORCA garante separação física
 REWARD_DENSITY_SCALE       =  -0.1
 
