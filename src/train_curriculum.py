@@ -9,7 +9,8 @@ from core.dqn_mode import DQNMode
 from environment.environment import Environment
 from environment.map_loader import load_map
 from policies.dqn_policy import DQNPolicy
-from rendering.renderer import Renderer
+# from rendering.renderer import Renderer
+from rendering.renderer_debug import Renderer
 from simulation_params import (
     DQN_HIDDEN_DIM, DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR,
     DQN_BUFFER_CAPACITY, DQN_TARGET_UPDATE_FREQ, DQN_TRAIN_START_SIZE,
@@ -177,6 +178,7 @@ def run_episode(env, policy, renderer=None, train=True):
         ep_reward += sum(rewards)
 
         if renderer is not None:
+            renderer.update_rewards(env, rewards)
             renderer.render(env)
 
     metrics = env.get_episode_metrics()

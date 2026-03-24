@@ -57,7 +57,8 @@ from environment.map_loader import load_map
 from policies.astar_policy import AStarPolicy
 from policies.random_policy import RandomPolicy
 from policies.dqn_policy import DQNPolicy
-from rendering.renderer import Renderer
+# from rendering.renderer import Renderer
+from rendering.renderer_debug import Renderer
 from simulation_params import (
     ASTAR_HAZARD_COST,
     DQN_HIDDEN_DIM, DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR,
@@ -134,9 +135,10 @@ def run_episode(env, policy, renderer=None):
             for a in env.agents
         ]
 
-        _, _, done, _ = env.step(actions)
+        _, rewards, done, _ = env.step(actions)
 
         if renderer is not None:
+            renderer.update_rewards(env, rewards) 
             renderer.render(env)
 
     return env.get_episode_metrics()
