@@ -275,7 +275,6 @@ class Environment:
         for row, col in available_spawns[:num_to_create]:
             spawn_x, spawn_y = self.cell_center_to_world(row, col)
             agent = Agent(spawn_x, spawn_y)
-            agent.stagnation_steps = 0  # contador de steps consecutivos sem progresso BFS
             self.agents.append(agent)
 
         return [self.get_observation(agent) for agent in self.agents]
@@ -428,8 +427,19 @@ class Environment:
             return None
         nx = -u_x / u_len
         ny = -u_y / u_len
-        # responsabilidade dividida 50/50
-        b  = (vx + 0.5*u_x)*nx + (vy + 0.5*u_y)*ny
+
+        # Responsabilidade adaptativa:
+        # Se o outro agente está parado (velocidade baixa), ele não vai desviar.
+        # Reduzimos a responsabilidade do outro de 50% → 10%, fazendo o agente
+        # atual assumir mais da evasão. Evita deadlock quando vizinho está
+        # estático (esperando, stuck, início de episódio com epsilon alto).
+        o_speed = math.hypot(ovx, ovy)
+        if o_speed < 5.0:  # px/s — considerado "parado"
+            responsibility = 0.9  # agente assume 90% da evasão
+        else:
+            responsibility = 0.5  # divisão normal 50/50
+
+        b = (vx + responsibility*u_x)*nx + (vy + responsibility*u_y)*ny
         return nx, ny, b
 
     def _orca_half_plane_wall(self, px, py, vx, vy, radius, obs):
@@ -457,7 +467,13 @@ class Environment:
     def _solve_orca(self, dvx, dvy, max_speed, hps):
         """
         Projeta velocidade desejada no espaço ORCA-seguro.
-        LP incremental O(n²) — suficiente para N≤12.
+        LP incremental O(n²).
+
+        Quando o LP falha (half-planes conflitantes), usa minimização de
+        violação: encontra a velocidade que viola o mínimo possível o conjunto
+        de restrições, ponderando paredes (índices baixos) mais que agentes.
+        Isso garante que o agente sempre tem uma velocidade não-zero para
+        sair do deadlock — mesmo em corredores cheios.
         """
         vx, vy = dvx, dvy
         spd = math.hypot(vx, vy)
@@ -465,56 +481,80 @@ class Environment:
             vx = vx / spd * max_speed
             vy = vy / spd * max_speed
 
+        n_walls = sum(1 for (nx,ny,b) in hps if b > max_speed * 0.5)
+
         for i, (nx, ny, b) in enumerate(hps):
             if nx*vx + ny*vy >= b - 1e-6:
                 continue
-            # Projeta velocidade desejada na fronteira do half-plane
-            dot  = nx*dvx + ny*dvy
-            px_  = dvx + (b - dot) * nx
-            py_  = dvy + (b - dot) * ny
+
+            # Projeta velocidade desejada na fronteira
+            dot = nx*dvx + ny*dvy
+            px_ = dvx + (b - dot) * nx
+            py_ = dvy + (b - dot) * ny
             pspd = math.hypot(px_, py_)
             if pspd > max_speed and pspd > 0:
                 px_ = px_ / pspd * max_speed
                 py_ = py_ / pspd * max_speed
-            # Verifica half-planes anteriores
+
             ok = all(hps[j][0]*px_ + hps[j][1]*py_ >= hps[j][2] - 1e-6
                      for j in range(i))
             if ok:
                 vx, vy = px_, py_
-            else:
-                # Fallback: interseção par-a-par
-                best_d = float("inf")
-                bvx, bvy = 0.0, 0.0
-                for j in range(i):
-                    nj, njy, bj = hps[j]
-                    det = nx*njy - ny*nj
-                    if abs(det) < 1e-9:
-                        continue
-                    t  = (njy*(b - bj) - nj*(b - bj)) / det
-                    ix = b*nx + t*(-ny)
-                    iy = b*ny + t*nx
-                    ispd = math.hypot(ix, iy)
-                    if ispd > max_speed and ispd > 0:
-                        ix = ix / ispd * max_speed
-                        iy = iy / ispd * max_speed
-                    d = (ix-dvx)**2 + (iy-dvy)**2
-                    if d < best_d:
-                        best_d = d
-                        bvx, bvy = ix, iy
-                # Se nenhuma interseção válida encontrada, usa velocidade
-                # de menor magnitude que satisfaça o half-plane atual.
-                # Evita que agente fique completamente parado por deadlock físico.
-                if best_d == float("inf"):
-                    # Projeta zero-velocity no half-plane (mínima penetração)
-                    dot0 = nx*0.0 + ny*0.0
-                    if dot0 < b:
-                        bvx = b * nx
-                        bvy = b * ny
-                        spd0 = math.hypot(bvx, bvy)
-                        if spd0 > max_speed and spd0 > 0:
-                            bvx = bvx / spd0 * max_speed
-                            bvy = bvy / spd0 * max_speed
-                vx, vy = bvx, bvy
+                continue
+
+            # LP falhou — minimização de violação
+            # Itera candidatos: interseções par-a-par + projeções individuais
+            candidates = []
+
+            # Interseções par-a-par
+            for j in range(i):
+                nj, njy, bj = hps[j]
+                det = nx*njy - ny*nj
+                if abs(det) < 1e-9:
+                    continue
+                t  = (njy*(b - bj) - nj*(b - bj)) / det
+                ix = b*nx + t*(-ny)
+                iy = b*ny + t*nx
+                ispd = math.hypot(ix, iy)
+                if ispd > max_speed and ispd > 0:
+                    ix = ix / ispd * max_speed
+                    iy = iy / ispd * max_speed
+                candidates.append((ix, iy))
+
+            # Projeção de cada half-plane individualmente
+            for k in range(i+1):
+                nk, nky, bk = hps[k]
+                dotk = nk*dvx + nky*dvy
+                cx_ = dvx + (bk - dotk) * nk
+                cy_ = dvy + (bk - dotk) * nky
+                cspd = math.hypot(cx_, cy_)
+                if cspd > max_speed and cspd > 0:
+                    cx_ = cx_ / cspd * max_speed
+                    cy_ = cy_ / cspd * max_speed
+                candidates.append((cx_, cy_))
+
+            if not candidates:
+                # Último recurso: velocidade mínima na direção do half-plane
+                bvx = min(b, max_speed * 0.3) * nx
+                bvy = min(b, max_speed * 0.3) * ny
+                candidates.append((bvx, bvy))
+
+            # Escolhe candidato com menor violação total ponderada
+            # (paredes têm peso 3x maior que agentes)
+            def violation_cost(cvx, cvy):
+                total = 0.0
+                for k, (nk, nky, bk) in enumerate(hps[:i+1]):
+                    v = bk - (nk*cvx + nky*cvy)
+                    if v > 0:
+                        weight = 3.0 if k < n_walls else 1.0
+                        total += weight * v * v
+                # Penaliza distância da velocidade desejada
+                total += 0.1 * ((cvx-dvx)**2 + (cvy-dvy)**2)
+                return total
+
+            best_c = min(candidates, key=lambda c: violation_cost(c[0], c[1]))
+            vx, vy = best_c
+
         return vx, vy
 
     def apply_action(self, agent, action):
@@ -972,6 +1012,17 @@ class Environment:
         dx_exit = exit_cx - agent.x
         dy_exit = exit_cy - agent.y
 
+        # Vetor unitário de direção ao exit.
+        # Normalizar pela distância em vez do tamanho do mapa garante que
+        # a intensidade do sinal é constante independente do tamanho do mapa —
+        # resolve o problema de features ~0.01 em mapas grandes como di_emergency.
+        dist_exit = math.hypot(dx_exit, dy_exit)
+        if dist_exit > 1e-6:
+            dir_x = dx_exit / dist_exit
+            dir_y = dy_exit / dist_exit
+        else:
+            dir_x, dir_y = 0.0, 0.0
+
         max_dist = math.hypot(self.map_data.width, self.map_data.height)
         max_hazard_dist = HAZARD_VISION_RADIUS * 2.0
 
@@ -994,8 +1045,8 @@ class Environment:
         return [
             agent.x / self.map_data.width,
             agent.y / self.map_data.height,
-            dx_exit / self.map_data.width,
-            dy_exit / self.map_data.height,
+            dir_x,   # [2] direção ao exit — vetor unitário X
+            dir_y,   # [3] direção ao exit — vetor unitário Y
             bfs_dist_norm,                                           # [4] BFS, não euclid
             angle_to_exit,
             haz_visible,
