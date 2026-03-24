@@ -23,6 +23,8 @@ from simulation_params import (
     FSM_PANIC_VEL_SMOOTH,
     REWARD_PROGRESS_SCALE, REWARD_EVACUATED, REWARD_TIME_PENALTY,
     REWARD_NO_PROGRESS,
+    REWARD_STAGNATION_STUCK,
+    REWARD_STAGNATION_OSCILLATE,
     REWARD_HAZARD_CONTACT, REWARD_HAZARD_VISIBLE_CALM,
     REWARD_HAZARD_PANIC, REWARD_COLLISION, REWARD_DENSITY_SCALE,
 )
@@ -743,6 +745,12 @@ class Environment:
                     moved_any = True
                     break
 
+        # Atualiza histórico de posições para detecção de stagnation
+        if not agent.evacuated:
+            agent._pos_history.append((agent.x, agent.y))
+            if len(agent._pos_history) > 12:   # janela de 12 steps (~1.2s)
+                agent._pos_history.pop(0)
+
         if self.touches_hazard(agent):
             agent.touched_hazard = True
 
@@ -1137,6 +1145,40 @@ class Environment:
     # Reward — reformulado para simular emoção e navegação realista
     # ------------------------------------------------------------------
 
+    def _detect_stagnation(self, agent) -> str | None:
+        """
+        Detecta padrão de movimento patológico a partir do histórico de posições.
+        Retorna:
+          'stuck'     — agente quase imóvel (variância < 4px²)
+          'oscillate' — agente indo e voltando (desvio > 3px mas deslocamento líquido < 2px)
+          None        — movimento normal
+        Só dispara com histórico completo (12 steps).
+        """
+        hist = getattr(agent, '_pos_history', [])
+        if len(hist) < 12:
+            return None
+
+        xs = [p[0] for p in hist]
+        ys = [p[1] for p in hist]
+
+        # Variância total de posição
+        mx = sum(xs) / len(xs)
+        my = sum(ys) / len(ys)
+        var = sum((x-mx)**2 + (y-my)**2 for x, y in hist) / len(hist)
+
+        # Deslocamento líquido (start → end)
+        net_dist = math.hypot(xs[-1] - xs[0], ys[-1] - ys[0])
+
+        # Deslocamento total percorrido (soma de todos os passos)
+        total_dist = sum(math.hypot(xs[i]-xs[i-1], ys[i]-ys[i-1])
+                         for i in range(1, len(hist)))
+
+        if var < 4.0:
+            return 'stuck'       # praticamente parado
+        if total_dist > 8.0 and net_dist < 2.0:
+            return 'oscillate'   # moveu bastante mas voltou ao mesmo lugar
+        return None
+
     def compute_reward(self, agent, prev_dist, new_dist, collided) -> float:
         max_dist = math.hypot(self.map_data.width, self.map_data.height)
 
@@ -1150,6 +1192,16 @@ class Environment:
 
         if progress <= 0 and not agent.evacuated:
             reward += REWARD_NO_PROGRESS
+
+        # Penalidade inteligente de stagnation — distingue parado de oscilando.
+        # Mais suave que REWARD_NO_PROGRESS porque pode ser física do ORCA,
+        # mas não ignora loops genuínos.
+        if not agent.evacuated:
+            stag = self._detect_stagnation(agent)
+            if stag == 'stuck':
+                reward += REWARD_STAGNATION_STUCK
+            elif stag == 'oscillate':
+                reward += REWARD_STAGNATION_OSCILLATE
 
         if self.touches_hazard(agent):
             reward += REWARD_HAZARD_CONTACT

@@ -4,10 +4,6 @@ from simulation_params import (
     AGENT_RADIUS,
     PLANNER_RADIUS_MARGIN,
     AGENT_BASE_SPEED,
-    OBSTACLE_AVOIDANCE_DISTANCE,
-    OBSTACLE_AVOIDANCE_STRENGTH,
-    AGENT_AVOIDANCE_DISTANCE,
-    AGENT_AVOIDANCE_STRENGTH,
     VELOCITY_SMOOTHING,
 )
 
@@ -29,25 +25,23 @@ class Agent:
         self.last_action = 0
 
         # Direção / estado
-        self.direction    = Direction.N
-        self.state        = FSMState.CALM
+        self.direction     = Direction.N
+        self.state         = FSMState.CALM
         self.emotion_level = 0.0
         self.peak_emotion  = 0.0
+
+        # Velocity smoothing — atualizado pelo update_fsm por estado
+        self.velocity_smoothing = VELOCITY_SMOOTHING
 
         # Status
         self.evacuated       = False
         self.alive           = True
         self.evacuation_time = None
-        self.touched_hazard  = False 
+        self.touched_hazard  = False
         self.exit_used       = None
-        self.stagnation_steps = 0
 
-        # Avoidance base
-        self.obstacle_avoidance_distance = OBSTACLE_AVOIDANCE_DISTANCE
-        self.obstacle_avoidance_strength = OBSTACLE_AVOIDANCE_STRENGTH
-        self.agent_avoidance_distance    = AGENT_AVOIDANCE_DISTANCE
-        self.agent_avoidance_strength    = AGENT_AVOIDANCE_STRENGTH
-        self.velocity_smoothing          = VELOCITY_SMOOTHING
+        # Histórico de posições para detecção de stagnation (environment.py)
+        self._pos_history = []
 
     def apply_position(self, x: float, y: float):
         self.x = float(x)

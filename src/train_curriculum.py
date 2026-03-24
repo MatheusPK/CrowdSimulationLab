@@ -1,3 +1,19 @@
+"""
+train_curriculum.py — treino DQN com currículo progressivo.
+
+Estratégia: multi-agent parameter sharing.
+  Todos os agentes compartilham a mesma rede e contribuem transições
+  independentes para o replay buffer.
+
+Uso:
+    python train_curriculum.py                   # treino completo
+    python train_curriculum.py --stage 6         # começa no stage 6
+    python train_curriculum.py --eval            # avalia nos mapas eval
+    python train_curriculum.py --fine-tune       # fine-tuning em di_style
+    python train_curriculum.py --render          # com visualização
+    python train_curriculum.py --quiet           # sem prints detalhados
+"""
+
 import argparse
 import csv
 import json
@@ -9,7 +25,6 @@ from core.dqn_mode import DQNMode
 from environment.environment import Environment
 from environment.map_loader import load_map
 from policies.dqn_policy import DQNPolicy
-# from rendering.renderer import Renderer
 from rendering.renderer_debug import Renderer
 from simulation_params import (
     DQN_HIDDEN_DIM, DQN_BATCH_SIZE, DQN_GAMMA, DQN_LR,
@@ -22,29 +37,36 @@ from simulation_params import (
     CONTAGION_RADIUS_HIGH_N, N_CONTAGION_THRESHOLD, HAZARD_CONTAGION_PCTG,
 )
 
-
+# ── Currículo ─────────────────────────────────────────────────────────────────
 # (nome, caminho, n_agents, max_steps, epsilon_decay)
+# epsilon_decay = ep_alvo × (N × max_steps / UPDATE_EVERY)
+# ep_alvo = 85% do ep_promoção esperado para o stage
+
 CURRICULUM = [
-    ("mall_small",              "maps/train/mall_small.txt",              4,  300,   32_500),
-    ("school_small",            "maps/train/school_small.txt",            4,  300,   45_000),
-    ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300,   45_000),
-    ("library_small",           "maps/train/library_small.txt",           4,  300,   45_000),
-    ("mall_small_bottom",       "maps/train/mall_small_bottom.txt",       4,  300,   45_000),
-    ("library_small_bottom",    "maps/train/library_small_bottom.txt",    4,  300,   45_000),
-    ("library_medium",          "maps/train/library_medium.txt",          6,  400,   85_000),
-    ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350,   41_650),
-    ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350,  150_000),
-    ("school_floor",            "maps/train/school_floor.txt",            8,  400,  190_400),
-    ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400,  238_000),
-    ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420,  249_900),
-    ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400,  290_000),
-    ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400,  290_000),
-    ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420,  330_000),
-    ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420,  299_880),
-    ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450,  436_050),
-    ("mall_medium",             "maps/train/mall_medium.txt",            12,  450,  367_200),
-    ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450,  436_050),
-    ("library_hard",            "maps/train/library_hard.txt",           12,  450,  367_200),
+    # (nome, caminho, n_agents, max_steps, epsilon_decay, eps_start)
+    # eps_start decresce por stage — agente já sabe navegar, precisa de menos exploração.
+    # Stages finais (N=12) começam com 30-35% para evitar mínimos locais
+    # sem desperdiçar centenas de episódios em exploração aleatória pura.
+    ("mall_small",              "maps/train/mall_small.txt",              4,  300,   32_500, 1.00),
+    ("school_small",            "maps/train/school_small.txt",            4,  300,   45_000, 1.00),
+    ("office_wing_small",       "maps/train/office_wing_small.txt",       4,  300,   45_000, 0.90),
+    ("library_small",           "maps/train/library_small.txt",           4,  300,   45_000, 0.90),
+    ("mall_small_bottom",       "maps/train/mall_small_bottom.txt",       4,  300,   45_000, 0.90),
+    ("library_small_bottom",    "maps/train/library_small_bottom.txt",    4,  300,   45_000, 0.90),
+    ("library_medium",          "maps/train/library_medium.txt",          6,  400,   85_000, 0.70),
+    ("hazard_corridor_small",   "maps/train/hazard_corridor_small.txt",   4,  350,   41_650, 0.70),
+    ("hazard_near_exit_small",  "maps/train/hazard_near_exit_small.txt",  6,  350,  150_000, 0.60),
+    ("school_floor",            "maps/train/school_floor.txt",            8,  400,  190_400, 0.60),
+    ("office_wing_medium",      "maps/train/office_wing_medium.txt",     10,  400,  238_000, 0.50),
+    ("hazard_near_exit_medium", "maps/train/hazard_near_exit_medium.txt",10,  420,  249_900, 0.50),
+    ("bridge_open_medium",      "maps/train/bridge_open_medium.txt",     11,  400,  290_000, 0.45),
+    ("bridge_corridor_medium",  "maps/train/bridge_corridor_medium.txt", 11,  400,  290_000, 0.45),
+    ("bridge_hazard_intro",     "maps/train/bridge_hazard_intro.txt",    12,  420,  330_000, 0.40),
+    ("bridge_multi_exit",       "maps/train/bridge_multi_exit.txt",      12,  420,  299_880, 0.40),
+    ("hazard_bypass_medium",    "maps/train/hazard_bypass_medium.txt",   12,  450,  436_050, 0.35),
+    ("mall_medium",             "maps/train/mall_medium.txt",            12,  450,  367_200, 0.35),
+    ("hazard_dense_office",     "maps/train/hazard_dense_office.txt",    12,  450,  436_050, 0.30),
+    ("library_hard",            "maps/train/library_hard.txt",           12,  450,  367_200, 0.30),
 ]
 
 FINE_TUNE_MAP = ("di_style", "maps/train/di_style.txt", 12, 500, 270_000)
@@ -79,6 +101,8 @@ DQN_CFG = dict(
     per_alpha=PER_ALPHA, per_beta_start=PER_BETA_START, per_beta_frames=PER_BETA_FRAMES,
     update_every=DQN_UPDATE_EVERY,
 )
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def ensure_dirs():
     MODEL_DIR.mkdir(exist_ok=True)
@@ -116,6 +140,7 @@ def build_env(map_path, n_agents, max_steps, contagion_radius=None):
     return Environment(**kwargs)
 
 def _stage_contagion_radius(map_path: str, n_agents: int):
+    """Retorna CONTAGION_RADIUS_HIGH_N para stages com N>=12 e hazard >5%."""
     if n_agents < N_CONTAGION_THRESHOLD:
         return None
     try:
@@ -140,6 +165,8 @@ def build_renderer(env, title, fps=30, enabled=True, scale=1):
     r.initialize()
     r.enabled = enabled
     return r
+
+# ── Loop de episódio ──────────────────────────────────────────────────────────
 
 def run_episode(env, policy, renderer=None, train=True):
     obs_list = env.reset()
@@ -185,9 +212,11 @@ def run_episode(env, policy, renderer=None, train=True):
     metrics["total_reward"] = ep_reward
     return metrics
 
+# ── Treino de um stage ────────────────────────────────────────────────────────
+
 def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
                 stage_label=None, prev_renderer=None, prev_promoted=True, scale=1):
-    name, map_path, n_agents, max_steps, stage_decay = CURRICULUM[stage_idx]
+    name, map_path, n_agents, max_steps, stage_decay, eps_start = CURRICULUM[stage_idx]
     label = stage_label or f"Stage {stage_idx + 1}"
 
     contagion_radius = _stage_contagion_radius(map_path, n_agents)
@@ -205,9 +234,9 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
                 policy.buffer.capacity, alpha=policy.buffer.alpha
             )
         if verbose:
-            print(f"  [buffer resetado — patience completa esgotada]")
+            print(f"  [buffer resetado]")
 
-    policy.reset_for_stage(stage_decay=stage_decay, epsilon_start=1.0)
+    policy.reset_for_stage(stage_decay=stage_decay, epsilon_start=eps_start)
 
     recent    = deque(maxlen=EVAL_WINDOW)
     ep_global = ep_global_start
@@ -231,7 +260,7 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
         print(f"\n{'='*60}")
         print(f"{label}/{len(CURRICULUM)}: {name}{marker}")
         print(f"  {map_path}")
-        print(f"  agents={n_agents}  max_steps={max_steps}  decay={stage_decay:,}{cr_info}")
+        print(f"  agents={n_agents}  max_steps={max_steps}  decay={stage_decay:,}  eps_start={eps_start:.2f}{cr_info}")
         print(f"{'='*60}")
 
     while stage_ep < PATIENCE:
@@ -267,17 +296,12 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
             policy.save(str(MODEL_DIR / f"ckpt_s{stage_idx+1}_ep{ep_global}.pth"))
             save_state(stage_idx, ep_global)
 
-        early_patience_ok = (
-            stage_ep >= EARLY_PATIENCE_AFTER
-            and len(recent) >= EVAL_WINDOW
-            and sum(recent) / len(recent) < EARLY_PATIENCE_THR
-            and policy.current_epsilon() < 0.20
-        )
-        if early_patience_ok:
+        if (stage_ep >= EARLY_PATIENCE_AFTER
+                and len(recent) >= EVAL_WINDOW
+                and sum(recent) / len(recent) < EARLY_PATIENCE_THR):
             if verbose:
                 print(f"\n  [early patience: avg{EVAL_WINDOW}={sum(recent)/len(recent):.2f} "
-                      f"eps={policy.current_epsilon():.3f} após {stage_ep} ep]")
-            promoted = None
+                      f"após {stage_ep} ep]")
             break
 
         if (len(recent) >= EVAL_WINDOW
@@ -290,23 +314,19 @@ def train_stage(stage_idx, policy, ep_global_start, render=False, verbose=True,
     if renderer:
         renderer.close()
 
-    is_promoted = promoted is True
-    is_early    = promoted is None
-
     # Checkpoint de fim de stage — independente de promoção
     stage_ckpt = MODEL_DIR / f"ckpt_s{stage_idx+1}_final.pth"
     policy.save(str(stage_ckpt))
     policy.save(str(MODEL_PATH))
-    save_state(stage_idx + (1 if is_promoted else 0), ep_global)
+    save_state(stage_idx + (1 if promoted else 0), ep_global)
 
-    if verbose and not is_promoted:
+    if verbose and not promoted:
         avg = sum(recent) / len(recent) if recent else 0
-        if is_early:
-            print(f"\n  → Early patience ({stage_ep} ep, avg={avg:.2f}). Avançando sem reset de buffer.")
-        else:
-            print(f"\n  → Patience esgotada ({stage_ep} ep, avg={avg:.2f}). Avançando.")
+        print(f"\n  → Patience esgotada ({stage_ep} ep, avg={avg:.2f}). Avançando.")
 
-    return ep_global, is_promoted, renderer
+    return ep_global, promoted, renderer
+
+# ── Fine-tuning ───────────────────────────────────────────────────────────────
 
 def fine_tune(policy, ep_global_start, render=False, verbose=True, scale=1):
     name, map_path, n_agents, max_steps, stage_decay = FINE_TUNE_MAP
@@ -356,7 +376,11 @@ def fine_tune(policy, ep_global_start, render=False, verbose=True, scale=1):
     policy.save(str(MODEL_PATH))
     return ep_global
 
+# ── Avaliação ─────────────────────────────────────────────────────────────────
+
 def evaluate(model_path, n_episodes=20, render=False, scale=1, seed=None):
+    # Coleta todos os resultados antes de imprimir a tabela — evita que os
+    # prints de carregamento (DQN, Renderer) apareçam no meio da tabela
     if seed is not None:
         import random as _random
         _random.seed(seed)
@@ -396,6 +420,8 @@ def evaluate(model_path, n_episodes=20, render=False, scale=1, seed=None):
               f"{haz:>7.2f} {rutil:>7.3f} {var:>7.4f} {time:>6.0f}")
     print()
 
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--stage",     type=int,  default=None,  help="Começa no stage N")
@@ -428,7 +454,7 @@ def main():
     if args.stage and args.stage - 1 != saved_stage:
         ep_global = 0
 
-    _, map_path, n_agents, max_steps, _ = CURRICULUM[start]
+    _, map_path, n_agents, max_steps, _, _ = CURRICULUM[start]
     env_init = build_env(map_path, n_agents, max_steps)
     policy   = build_policy(env_init, args.model, DQNMode.TRAIN)
 
@@ -440,7 +466,7 @@ def main():
         prev_renderer = None
         prev_promoted = True
         for stage_idx in range(start, len(CURRICULUM)):
-            ep_global, is_promoted, prev_renderer = train_stage(
+            ep_global, prev_promoted, prev_renderer = train_stage(
                 stage_idx, policy, ep_global,
                 render=args.render,
                 verbose=not args.quiet,
@@ -448,8 +474,6 @@ def main():
                 prev_promoted=prev_promoted,
                 scale=args.scale,
             )
-
-            prev_promoted = is_promoted
 
     if args.fine_tune:
         ep_global = fine_tune(
