@@ -1,46 +1,28 @@
 from core.direction import Direction
 from core.fsm_state import FSMState
-from simulation_params import (
-    AGENT_RADIUS,
-    PLANNER_RADIUS_MARGIN,
-    AGENT_BASE_SPEED,
-    VELOCITY_SMOOTHING,
-)
-
+from simulation_params import *
 
 class Agent:
     def __init__(self, x=0.0, y=0.0):
         self.x = float(x)
         self.y = float(y)
-
-        # Geometria
         self.radius               = AGENT_RADIUS
         self.planner_radius_margin = PLANNER_RADIUS_MARGIN
-
-        # Movimento
         self.base_speed    = AGENT_BASE_SPEED
         self.current_speed = self.base_speed
         self.vx = 0.0
         self.vy = 0.0
         self.last_action = 0
-
-        # Direção / estado
         self.direction     = Direction.N
         self.state         = FSMState.CALM
         self.emotion_level = 0.0
         self.peak_emotion  = 0.0
-
-        # Velocity smoothing — atualizado pelo update_fsm por estado
         self.velocity_smoothing = VELOCITY_SMOOTHING
-
-        # Status
         self.evacuated       = False
         self.alive           = True
         self.evacuation_time = None
         self.touched_hazard  = False
         self.exit_used       = None
-
-        # Histórico de posições para detecção de stagnation (environment.py)
         self._pos_history = []
 
     def apply_position(self, x: float, y: float):
