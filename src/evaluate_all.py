@@ -57,7 +57,6 @@ from environment.map_loader import load_map
 from policies.astar_policy import AStarPolicy
 from policies.random_policy import RandomPolicy
 from policies.dqn_policy import DQNPolicy
-# from rendering.renderer import Renderer
 from rendering.renderer_debug import Renderer
 from simulation_params import (
     ASTAR_HAZARD_COST,

@@ -1,5 +1,6 @@
 import heapq
 import math
+import random
 from collections import deque
 
 from core.direction import Direction
@@ -40,8 +41,7 @@ class Environment:
     def reset(self):
         self.time = 0
         self.agents = []
-
-        import random
+        
         available_spawns = list(self.map_data.spawns)
         random.shuffle(available_spawns)
         num_to_create = min(self.num_agents_requested, len(available_spawns))

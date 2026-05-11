@@ -3,11 +3,11 @@ import csv
 import json
 from collections import deque
 from pathlib import Path
-
 from core.dqn_mode import DQNMode
 from environment.environment import Environment
 from environment.map_loader import load_map
 from policies.dqn_policy import DQNPolicy
+from policies.dqn_policy import PrioritizedReplayBuffer
 from rendering.renderer_debug import Renderer
 from simulation_params import *
 
@@ -35,16 +35,6 @@ CURRICULUM = [
     ("library_hard",            "maps/train/library_hard.txt",           12,  450,  367_200, 0.30),
 ]
 
-FINE_TUNE_MAP = ("di_style", "maps/train/di_style.txt", 12, 500, 270_000)
-
-EVAL_MAPS = [
-    ("library_bottleneck", "maps/eval/library_bottleneck.txt", 12, 450),
-    ("office_single_exit", "maps/eval/office_single_exit.txt", 12, 450),
-    ("mall_panic",         "maps/eval/mall_panic.txt",         12, 450),
-    ("school_evacuation",  "maps/eval/school_evacuation.txt",  12, 450),
-    ("di_emergency",       "maps/eval/di_emergency.txt",       12, 500),
-]
-
 PROMOTION_THRESHOLD  = CURRICULUM_PROMOTION_THRESHOLD
 EVAL_WINDOW          = CURRICULUM_EVAL_WINDOW
 PATIENCE             = CURRICULUM_PATIENCE
@@ -58,18 +48,18 @@ MODEL_PATH = MODEL_DIR / "dqn_fsm.pth"
 LOG_PATH   = LOG_DIR / "training_log.csv"
 STATE_PATH = MODEL_DIR / "curriculum_state.json"
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--stage",     type=int,  default=None,  help="Começa no stage N")
+    p.add_argument("--render",    action="store_true")
+    p.add_argument("--model",     type=str,  default=str(MODEL_PATH))
+    p.add_argument("--scale",     type=int, default=1,      help="Fator de escala visual (ex: 2 = janela 2x maior)")
+    p.add_argument("--seed",      type=int, default=None,   help="Seed para reproducibilidade na eval (não afeta treino)")
+    return p.parse_args()
+
 def ensure_dirs():
     MODEL_DIR.mkdir(exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
-
-def save_state(stage, ep):
-    STATE_PATH.write_text(json.dumps({"stage": stage, "episode_global": ep}))
-
-def load_state():
-    if STATE_PATH.exists():
-        d = json.loads(STATE_PATH.read_text())
-        return d.get("stage", 0), d.get("episode_global", 0)
-    return 0, 0
 
 def init_log():
     LOG_DIR.mkdir(exist_ok=True)
@@ -81,6 +71,15 @@ def init_log():
                 "mean_emotion_final", "emotion_variance", "mean_speed_ratio",
                 "total_reward", "epsilon",
             ])
+
+def load_state():
+    if STATE_PATH.exists():
+        d = json.loads(STATE_PATH.read_text())
+        return d.get("stage", 0), d.get("episode_global", 0)
+    return 0, 0
+
+def save_state(stage, ep):
+    STATE_PATH.write_text(json.dumps({"stage": stage, "episode_global": ep}))
 
 def log_ep(row):
     with open(LOG_PATH, "a", newline="") as f:
@@ -96,7 +95,7 @@ def build_env(map_path, n_agents, max_steps, contagion_radius=None):
         contagion_radius=contagion_radius,
     )
 
-def build_policy(env, model_path, mode):
+def build_policy(model_path, mode):
     return DQNPolicy(
         mode=mode,
         model_path=model_path,
@@ -146,7 +145,7 @@ def _stage_contagion_radius(map_path: str, n_agents: int):
         pass
     return None
 
-def run_episode(env, policy, renderer=None, train=True):
+def run_episode(env, policy, renderer):
     obs_list = env.reset()
     prev_obs = {id(a): obs_list[i] for i, a in enumerate(env.agents)}
     ep_reward = 0.0
@@ -154,70 +153,48 @@ def run_episode(env, policy, renderer=None, train=True):
     running = True
 
     while running and not done:
-        if renderer is not None:
-            running = renderer.poll_events()
-            if not running:
-                break
+        running = renderer.poll_events()
+        if not running: break
 
         actions = [
-            policy.choose_action(env, a, env.get_nearest_exit(a))
+            policy.choose_action(env, a)
             if not a.evacuated else None
             for a in env.agents
         ]
 
         next_obs, rewards, done, _ = env.step(actions)
 
-        if train:
-            for i, a in enumerate(env.agents):
-                if actions[i] is None:
-                    continue
-                policy.store_transition(
-                    obs=prev_obs[id(a)],
-                    action=actions[i],
-                    reward=rewards[i],
-                    next_obs=next_obs[i],
-                    done=done,
-                )
+        for i, a in enumerate(env.agents):
+            if actions[i] is None: continue
+
+            policy.store_transition(
+                obs=prev_obs[id(a)],
+                action=actions[i],
+                reward=rewards[i],
+                next_obs=next_obs[i],
+                done=done,
+            )
 
         prev_obs = {id(a): next_obs[i] for i, a in enumerate(env.agents)}
         ep_reward += sum(rewards)
 
-        if renderer is not None:
-            renderer.update_rewards(env, rewards)
-            renderer.render(env)
+        renderer.update_rewards(env, rewards)
+        renderer.render(env)
 
     metrics = env.get_episode_metrics()
     metrics["total_reward"] = ep_reward
     return metrics
 
-def train_stage(
-        stage_idx,
-        policy, 
-        ep_global_start, 
-        render=False,
-        stage_label=None, 
-        prev_renderer=None, 
-        prev_promoted=True, 
-        scale=1
-    ):
+def train_stage(stage_idx, policy, ep_global_start, render, prev_promoted, scale=1):
     name, map_path, n_agents, max_steps, stage_decay, eps_start = CURRICULUM[stage_idx]
-    label = stage_label or f"Stage {stage_idx + 1}"
+    label = f"Stage {stage_idx + 1}"
 
     contagion_radius = _stage_contagion_radius(map_path, n_agents)
-    env = build_env(map_path, n_agents, max_steps, contagion_radius=contagion_radius)
-
-    render_enabled = prev_renderer.enabled if prev_renderer is not None else True
-    renderer = build_renderer(env, f"{label}: {name}", enabled=render_enabled, scale=scale) if render else None
+    env              = build_env(map_path, n_agents, max_steps, contagion_radius=contagion_radius)
+    renderer         = build_renderer(env, f"{label}: {name}", enabled=render, scale=scale)
 
     if not prev_promoted:
-        if hasattr(policy.buffer, "reset"):
-            policy.buffer.reset()
-        else:
-            from policies.dqn_policy import PrioritizedReplayBuffer
-            policy.buffer = PrioritizedReplayBuffer(
-                policy.buffer.capacity, alpha=policy.buffer.alpha
-            )
-
+        policy.reset_buffer()
         print(f"  [buffer resetado]")
 
     policy.reset_for_stage(stage_decay=stage_decay, epsilon_start=eps_start)
@@ -235,7 +212,7 @@ def train_stage(
     print(f"{'='*60}")
 
     while stage_ep < PATIENCE:
-        m = run_episode(env, policy, renderer, train=True)
+        m = run_episode(env, policy, renderer)
         recent.append(m["evacuation_rate"])
         ep_global += 1
         stage_ep  += 1
@@ -273,11 +250,10 @@ def train_stage(
 
         if (len(recent) >= EVAL_WINDOW and sum(recent) / len(recent) >= PROMOTION_THRESHOLD):
             promoted = True
-            print(f"\n  ✓ PROMOVIDO! avg{EVAL_WINDOW}={sum(recent)/len(recent):.2f}")
+            print(f"\n  PROMOVIDO! avg{EVAL_WINDOW}={sum(recent)/len(recent):.2f}")
             break
 
-    if renderer:
-        renderer.close()
+    renderer.close()
 
     stage_ckpt = MODEL_DIR / f"ckpt_s{stage_idx+1}_final.pth"
     policy.save(str(stage_ckpt))
@@ -286,68 +262,9 @@ def train_stage(
 
     if not promoted:
         avg = sum(recent) / len(recent) if recent else 0
-        print(f"\n  → Patience esgotada ({stage_ep} ep, avg={avg:.2f}). Avançando.")
+        print(f"\n  Patience esgotada ({stage_ep} ep, avg={avg:.2f}). Avançando.")
 
     return ep_global, promoted, renderer
-
-def fine_tune(policy, ep_global_start, render=False, verbose=True, scale=1):
-    name, map_path, n_agents, max_steps, stage_decay = FINE_TUNE_MAP
-    env = build_env(map_path, n_agents, max_steps)
-    renderer = build_renderer(env, f"Fine-tune: {name}", scale=scale) if render else None
-    policy.reset_for_stage(stage_decay=stage_decay, epsilon_start=1.0)
-
-    ep_global = ep_global_start
-    recent = deque(maxlen=EVAL_WINDOW)
-
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"FINE-TUNING: {name}  agents={n_agents}  decay={stage_decay:,}")
-        print(f"{'='*60}")
-
-    for ft_ep in range(1, PATIENCE + 1):
-        m = run_episode(env, policy, renderer, train=True)
-        recent.append(m["evacuation_rate"])
-        ep_global += 1
-
-        log_ep({
-            "episode_global": ep_global, "stage": len(CURRICULUM) + 1, "map_name": name,
-            "evacuation_rate":    round(m["evacuation_rate"], 4),
-            "all_evacuated":      int(m.get("all_evacuated", False)),
-            "mean_evac_time":     round(m.get("mean_evacuation_time", max_steps), 2),
-            "steps":              m.get("steps", max_steps),
-            "mean_emotion_final": round(m.get("mean_emotion_final", 0), 4),
-            "emotion_variance":   round(m.get("emotion_variance", 0), 4),
-            "mean_speed_ratio":   round(m.get("mean_speed_ratio", 1), 4),
-            "total_reward":       round(m["total_reward"], 2),
-            "epsilon":            round(policy.current_epsilon(), 4),
-        })
-
-        if verbose and ft_ep % 10 == 0:
-            avg = sum(recent) / len(recent)
-            print(f"  [ft|ep{ft_ep:4d}|g{ep_global:5d}] "
-                  f"evac={m['evacuation_rate']:.2f}  avg={avg:.2f}  "
-                  f"eps={policy.current_epsilon():.3f}")
-
-        if len(recent) >= EVAL_WINDOW and sum(recent) / len(recent) >= PROMOTION_THRESHOLD:
-            if verbose:
-                print(f"\n  ✓ Fine-tuning convergido!")
-            break
-
-    if renderer:
-        renderer.close()
-    policy.save(str(MODEL_PATH))
-    return ep_global
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--stage",     type=int,  default=None,  help="Começa no stage N")
-    p.add_argument("--fine-tune", action="store_true",       help="Fine-tuning em di_style")
-    p.add_argument("--render",    action="store_true")
-    p.add_argument("--model",     type=str,  default=str(MODEL_PATH))
-    p.add_argument("--scale",     type=int, default=1,      help="Fator de escala visual (ex: 2 = janela 2x maior)")
-    p.add_argument("--seed",      type=int, default=None,   help="Seed para reproducibilidade na eval (não afeta treino)")
-    return p.parse_args()
-
 
 def main():
     args = parse_args()
@@ -358,41 +275,25 @@ def main():
     start = (args.stage - 1) if args.stage else saved_stage
     start = max(0, min(start, len(CURRICULUM) - 1))
 
-    if args.stage and args.stage - 1 != saved_stage:
-        ep_global = 0
-
-    _, map_path, n_agents, max_steps, _, _ = CURRICULUM[start]
-    env_init = build_env(map_path, n_agents, max_steps)
-    policy   = build_policy(env_init, args.model, DQNMode.TRAIN)
+    policy = build_policy(args.model, DQNMode.TRAIN)
 
     print(f"[INFO] device  = {policy.device}")
     print(f"[INFO] modelo  = {args.model}")
     print(f"[INFO] stage   = {start + 1}/{len(CURRICULUM)}  ep_global={ep_global}")
 
-    if not args.fine_tune:
-        prev_renderer = None
-        prev_promoted = True
-        for stage_idx in range(start, len(CURRICULUM)):
-            ep_global, prev_promoted, prev_renderer = train_stage(
-                stage_idx,
-                policy,
-                ep_global,
-                render=args.render,
-                prev_renderer=prev_renderer,
-                prev_promoted=prev_promoted,
-                scale=args.scale,
-            )
-
-    if args.fine_tune:
-        ep_global = fine_tune(
-            policy, ep_global,
-            render=args.render,
-            verbose=not args.quiet,
+    render = args.render
+    prev_promoted = True
+    for stage_idx in range(start, len(CURRICULUM)):
+        ep_global, prev_promoted, render = train_stage(
+            stage_idx,
+            policy,
+            ep_global,
+            render=render,
+            prev_promoted=prev_promoted,
             scale=args.scale,
         )
 
     print(f"\n[DONE] Modelo salvo em: {MODEL_PATH}")
-
 
 if __name__ == "__main__":
     main()

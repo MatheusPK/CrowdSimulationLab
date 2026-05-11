@@ -198,7 +198,7 @@ class DQNPolicy:
     # Interface publica
     # ------------------------------------------------------------------
 
-    def choose_action(self, env, agent, exit_obj=None) -> int:
+    def choose_action(self, env, agent) -> int:
         if agent.evacuated:
             return None
 
@@ -235,9 +235,14 @@ class DQNPolicy:
     def reset_for_stage(self, stage_decay: int, epsilon_start: float = 1.0):
         self.steps_done        = 0
         self._transition_count = 0
-        # _global_transitions nunca reseta — mantém beta decaindo globalmente
         self.epsilon_decay  = stage_decay
         self.epsilon_start  = epsilon_start
+
+    def reset_buffer(self):
+        self.buffer = PrioritizedReplayBuffer(
+            self.buffer.capacity, 
+            alpha=self.buffer.alpha
+        )
 
     # ------------------------------------------------------------------
     # Internos
